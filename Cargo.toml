@@ -1,0 +1,17 @@
+[package]
+name = "wal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crc32fast = "1.4"
+byteorder = "1.5"
+futures = "0.3"
+zerocopy = "0.8"
+zerocopy-derive = "0.8"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.29", features = ["ioctl", "fs"] }
+io-uring = "0.7"
+libc = "0.2"
+fcntl = "0.1"
