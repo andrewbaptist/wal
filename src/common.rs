@@ -53,6 +53,9 @@ pub struct AlignedSlice {
     pub blocks: u32,
 }
 
+unsafe impl Send for AlignedSlice {
+}
+
 impl AlignedSlice {
     pub fn new(raw_size: usize) -> Self {
         let blocks = (raw_size).div_ceil(BLOCK_SIZE as usize) as u32;
@@ -60,7 +63,7 @@ impl AlignedSlice {
         let buffer_ptr = unsafe { alloc_zeroed(layout) };
         AlignedSlice {
             buffer_ptr,
-            blocks: blocks as u32,
+            blocks,
         }
     }
 
@@ -75,8 +78,8 @@ impl AlignedSlice {
             .expect("invalid layout")
     }
 
-    pub fn len(&self) -> u32 {
-        self.blocks as u32 * BLOCK_SIZE as u32
+    pub fn size(&self) -> u32 {
+        self.blocks * BLOCK_SIZE
     }
 }
 

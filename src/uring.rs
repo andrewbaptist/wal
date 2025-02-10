@@ -52,7 +52,7 @@ impl Drop for LinuxUring {
 
 impl PersistentDevice for LinuxUring {
     fn write(&mut self, pos: WalPosition, data: AlignedSlice, notify: bool) -> std::io::Result<()> {
-        let entry = opcode::Write::new(types::Fd(self.fd), data.buffer_ptr, data.len())
+        let entry = opcode::Write::new(types::Fd(self.fd), data.buffer_ptr, data.size())
             .offset(pos.byte_offset())
             .build();
 

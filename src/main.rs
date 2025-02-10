@@ -15,6 +15,9 @@ pub mod wal;
 #[cfg(target_os = "linux")]
 pub mod uring;
 
+#[cfg(target_os = "macos")]
+pub mod pwrite;
+
 const NUM_TO_WRITE: usize = 2;
 
 // This demonstrates how to use the wal. Open and begin recovery. Once it is recovered, then
@@ -67,7 +70,7 @@ fn main() {
         s.spawn(move || {
             let mut num_outstanding = NUM_TO_WRITE;
             while num_outstanding > 0 {
-                if let Ok(_) = rx.recv() {
+                if rx.recv().is_ok() {
                     num_outstanding -= 1;
                 }
             }

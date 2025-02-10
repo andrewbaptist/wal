@@ -4,7 +4,7 @@ use crate::common::*;
 use crate::uring::LinuxUring;
 
 #[cfg(target_os = "macos")]
-use crate::mem::MemDevice;
+use crate::pwrite::MacOsAsyncIO;
 
 use crc32fast::Hasher;
 use std::fs::File;
@@ -30,8 +30,7 @@ impl EntryHeader {
     fn compute_crc(&self, buffer: &[u8]) -> u32 {
         let mut hasher = Hasher::new();
         hasher.update(&buffer[4..HEADER_SIZE + self.len as usize]);
-        let crc = hasher.finalize();
-        crc
+        hasher.finalize()
     }
 
     // This returns how many blocks are required to store the full entry.
@@ -184,7 +183,7 @@ impl Wal {
         buffer[..HEADER_SIZE].copy_from_slice(header.as_bytes());
         buffer[HEADER_SIZE..HEADER_SIZE + data.len()].copy_from_slice(data);
 
-        header.crc = header.compute_crc(&buffer);
+        header.crc = header.compute_crc(buffer);
         // Re-copy the header with the CRC filled.
         buffer[..HEADER_SIZE].copy_from_slice(header.as_bytes());
 
@@ -219,7 +218,7 @@ impl Wal {
         #[cfg(target_os = "linux")]
         let dev = LinuxUring::new(path)?;
         #[cfg(target_os = "macos")]
-        let dev = MemDevice::new()?;
+        let dev = MacOsAsyncIO::new(path)?;
 
         let capacity_bytes = path.metadata()?.len();
         if capacity_bytes % BLOCK_SIZE as u64 != 0 {
