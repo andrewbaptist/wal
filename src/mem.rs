@@ -6,19 +6,30 @@ use std::collections::HashMap;
 pub struct MemDevice {
     buffer: HashMap<WalPosition, Vec<u8>>,
     completions: Vec<WalPosition>,
+    capacity_blocks: u32,
 }
 
 impl MemDevice {
-    pub fn new() -> Self {
+    pub fn new(capacity_blocks: u32) -> Self {
         Self {
             buffer: HashMap::new(),
             completions: Vec::new(),
+            capacity_blocks,
         }
     }
 }
 
 impl PersistentDevice for MemDevice {
     fn write(&mut self, pos: WalPosition, data: AlignedSlice, notify: bool) -> std::io::Result<()> {
+        // Check if write would exceed capacity
+        let write_end = pos.offset + data.blocks;
+        if write_end > self.capacity_blocks {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Write would exceed device capacity",
+            ));
+        }
+
         // Store the data in memory
         let slice = unsafe { std::slice::from_raw_parts(data.buffer_ptr, data.size() as usize) };
         self.buffer.insert(pos, slice.to_vec());
@@ -44,7 +55,7 @@ mod tests {
 
     #[test]
     fn test_mem_buffer_device() -> std::io::Result<()> {
-        let mut device = MemDevice::new();
+        let mut device = MemDevice::new(1024); // 1024 blocks capacity
 
         // Test write with notification
         let pos1 = WalPosition {
