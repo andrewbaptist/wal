@@ -5,7 +5,7 @@ use log::warn;
 
 use crate::PersistentDevice;
 
-use libc::{self, c_void, F_NOCACHE, O_WRONLY};
+use libc::{self, c_void, F_NOCACHE, O_NONBLOCK, O_WRONLY};
 use std::ffi::c_int;
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
@@ -14,6 +14,7 @@ use std::path::Path;
 
 // TODO: Figure out the right import for this
 pub const SIGEV_KEVENT: c_int = 3;
+pub const SIGIO: c_int = 23;
 
 // Same as Linux implementation.
 struct CompletionData {
@@ -37,7 +38,7 @@ struct AioRequest {
 impl KQueue {
     pub fn new(path: &Path) -> std::io::Result<Self> {
         let path = CString::new(path.as_os_str().as_bytes())?;
-        let fd = unsafe { libc::open(path.as_ptr(), O_WRONLY | F_NOCACHE, 0o644) };
+        let fd = unsafe { libc::open(path.as_ptr(), O_NONBLOCK | O_WRONLY | F_NOCACHE, 0o644) };
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -79,23 +80,23 @@ impl PersistentDevice for KQueue {
         // Convert to raw pointer to manage ownership.
         let aio_request_ptr = Box::into_raw(aio_request);
 
-        // Initialize the AIO control block
+        // Initialize the AIO control block. The aio struct is self-referencial which requires unsafe rust to accomplish.
         unsafe {
-            (*aio_request_ptr).aio = libc::aiocb {
-                aio_fildes: self.fd,
-                aio_offset: pos.byte_offset() as i64,
-                aio_buf: (*aio_request_ptr).completion_data.slice.buffer_ptr as *mut c_void,
-                aio_nbytes: (*aio_request_ptr).completion_data.slice.size() as usize,
-                aio_sigevent: libc::sigevent {
-                    sigev_notify: SIGEV_KEVENT,
-                    sigev_signo: self.kq,
-                    sigev_value: libc::sigval {
-                        sival_ptr: aio_request_ptr as *mut c_void,
-                    },
-                    ..std::mem::zeroed()
-                },
-                ..std::mem::zeroed()
+            (*aio_request_ptr).aio.aio_fildes = self.fd;
+            (*aio_request_ptr).aio.aio_offset = pos.byte_offset() as i64;
+            let mut event: libc::sigevent = std::mem::zeroed();
+            event.sigev_notify = SIGEV_KEVENT;
+            event.sigev_signo = SIGIO;
+            event.sigev_value = libc::sigval {
+                sival_ptr: aio_request_ptr as *mut c_void,
             };
+
+            (*aio_request_ptr).aio.aio_sigevent = event;
+            (*aio_request_ptr).aio.aio_buf =
+                (*aio_request_ptr).completion_data.slice.buffer_ptr as *mut c_void;
+            (*aio_request_ptr).aio.aio_nbytes =
+                (*aio_request_ptr).completion_data.slice.size() as usize;
+            println!("{:#?}", (*aio_request_ptr).aio);
         }
 
         // Submit the aio_write.
@@ -103,7 +104,9 @@ impl PersistentDevice for KQueue {
         if result != 0 {
             // Reclaim the Box on failure.
             let _ = unsafe { Box::from_raw(aio_request_ptr) };
-            return Err(std::io::Error::last_os_error());
+            let err = Err(std::io::Error::last_os_error());
+            warn!("kevent error: {:?}", err);
+            return err;
         }
 
         // Register the AIO event with kqueue
