@@ -66,9 +66,42 @@ impl MacOsAsyncIO {
             completion_receiver,
         })
     }
+
+    fn read(&self, pos: WalPosition, len: usize) -> std::io::Result<Vec<u8>> {
+        // Open the file in read-only mode
+        let path = CString::new(self.path.as_os_str().as_bytes())?;
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY, 0o644) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        // Allocate buffer and perform the read
+        let mut buffer = vec![0; len];
+        let res = unsafe {
+            libc::pread(
+                fd,
+                buffer.as_mut_ptr() as *mut libc::c_void,
+                len,
+                pos.byte_offset() as i64,
+            )
+        };
+
+        // Close the file descriptor
+        unsafe { libc::close(fd) };
+
+        if res < 0 {
+            Err(std::io::Error::last_os_error())
+        } else if res as usize != len {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Short read",
+            ))
+        } else {
+            Ok(buffer)
+        }
+    }
 }
 
-// AI! Implement the read method for this struct.
 impl PersistentDevice for MacOsAsyncIO {
     fn write(&mut self, pos: WalPosition, data: AlignedSlice, notify: bool) -> std::io::Result<()> {
         let data = CompletionData {
