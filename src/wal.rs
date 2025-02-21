@@ -7,6 +7,8 @@ use crate::uring::LinuxUring;
 #[cfg(target_os = "macos")]
 use crate::pwrite::MacOsAsyncIO;
 
+use crate::sync::SyncDevice;
+
 use crc32fast::Hasher;
 use std::fs::File;
 use std::io::Error;
@@ -215,7 +217,11 @@ impl Wal {
     pub fn open(path: &Path) -> std::io::Result<(Self, WalIterator)> {
         info!("Starting recovery from {path:?}");
 
-        // TODO: Different device on mac.
+        // Handle running on any platform.
+        #[allow(unused_variables)]
+        let dev = SyncDevice::new(path)?;
+
+        // Use platform-specific device implementations
         #[cfg(target_os = "linux")]
         let dev = LinuxUring::new(path)?;
         #[cfg(target_os = "macos")]

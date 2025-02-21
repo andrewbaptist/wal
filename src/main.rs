@@ -11,6 +11,7 @@ use crate::wal::*;
 
 pub mod common;
 pub mod mem;
+pub mod sync;
 pub mod wal;
 
 #[cfg(target_os = "linux")]
