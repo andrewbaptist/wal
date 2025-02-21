@@ -227,7 +227,7 @@ impl Wal {
         if uri.scheme_str() == Some("mem") {
             // Parse size from path (e.g. mem://64 means 64 blocks)
             let blocks = uri.path().parse::<u32>().unwrap_or(1024); // Default to 1024 blocks
-            // Use in-memory device with specified size
+                                                                    // Use in-memory device with specified size
             dev = Box::new(crate::mem::MemDevice::new(blocks));
         } else {
             // Handle file paths
@@ -422,10 +422,10 @@ impl Wal {
             info!("Recovering from {:?} to {:?}", wal.tail, wal.head);
             Ok((wal, iterator))
         }
+    }
 
-        pub fn process_completions(&mut self) -> impl Iterator<Item = WalPosition> {
-            self.dev.process_completions()
-        }
+    pub fn process_completions(&mut self) -> impl Iterator<Item = WalPosition> {
+        self.dev.process_completions()
     }
 }
 
