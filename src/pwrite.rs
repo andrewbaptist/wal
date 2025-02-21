@@ -1,6 +1,7 @@
 use crate::common::*;
 use log::debug;
 //use crossbeam::channel::{self, TrySendError};
+use libc::{self, F_NOCACHE, O_WRONLY};
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
@@ -23,18 +24,10 @@ impl MacOsAsyncIO {
     pub fn new(path: &Path) -> std::io::Result<Self> {
         let path = CString::new(path.as_os_str().as_bytes())?;
 
-        // Open file with write-only mode
-        let fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY, 0o644) };
+        // Open file with write-only mode and NOCACHE,
+        let fd = unsafe { libc::open(path.as_ptr(), O_WRONLY | F_NOCACHE, 0o644) };
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
-        }
-
-        // Enable direct I/O using F_NOCACHE
-        let ret = unsafe { libc::fcntl(fd, libc::F_NOCACHE, 1) };
-        if ret == -1 {
-            let e = std::io::Error::last_os_error();
-            unsafe { libc::close(fd) };
-            return Err(e);
         }
 
         // Create communication channels
