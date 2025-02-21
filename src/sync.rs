@@ -64,6 +64,13 @@ impl PersistentDevice for SyncDevice {
         let completed = self.pending_syncs.drain(..).collect::<Vec<_>>();
         Box::new(completed.into_iter())
     }
+
+    fn read(&self, pos: WalPosition, len: usize) -> std::io::Result<Vec<u8>> {
+        let mut buffer = vec![0; len];
+        self.file.seek(std::io::SeekFrom::Start(pos.byte_offset()))?;
+        self.file.read_exact(&mut buffer)?;
+        Ok(buffer)
+    }
 }
 
 #[cfg(test)]

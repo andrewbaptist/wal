@@ -47,6 +47,26 @@ impl PersistentDevice for MemDevice {
         let completions = std::mem::take(&mut self.completions);
         Box::new(completions.into_iter())
     }
+
+    fn read(&self, pos: WalPosition, len: usize) -> std::io::Result<Vec<u8>> {
+        self.buffer.get(&pos)
+            .map(|data| {
+                if len > data.len() {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Read length exceeds available data",
+                    ))
+                } else {
+                    Ok(data[..len].to_vec())
+                }
+            })
+            .unwrap_or_else(|| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Position not found",
+                ))
+            })
+    }
 }
 
 #[cfg(test)]

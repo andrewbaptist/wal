@@ -15,7 +15,8 @@ pub trait PersistentDevice: Send {
     /// written data has been synced to disk. It will write any completed data to the given channel.
     fn process_completions(&mut self) -> Box<dyn Iterator<Item = WalPosition>>;
 
-    // AI! Add a method read() which pakes a WalPostion and a length and returns the data in it.
+    /// Read data from the device at the given position and length
+    fn read(&self, pos: WalPosition, len: usize) -> std::io::Result<Vec<u8>>;
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
