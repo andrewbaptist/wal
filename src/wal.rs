@@ -220,6 +220,8 @@ impl Wal {
         // Check if we should force using the sync device
         let use_sync = std::env::var("WAL_SYNC_DEVICE").is_ok();
 
+        // AI! Add a env variable to use the MemDevice
+
         let dev: Box<dyn PersistentDevice>;
 
         if use_sync {
