@@ -33,6 +33,14 @@ impl PersistentDevice for SyncDevice {
         let buffer = unsafe { std::slice::from_raw_parts(data.buffer_ptr, data.size() as usize) };
 
         // Perform the write using standard file operations
+        let file_len = self.file.metadata()?.len();
+        let write_end = pos.byte_offset() + buffer.len() as u64;
+        if write_end > file_len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Write position exceeds file length",
+            ));
+        }
         self.file
             .seek(std::io::SeekFrom::Start(pos.byte_offset()))?;
         self.file.write_all(buffer)?;
@@ -55,5 +63,117 @@ impl PersistentDevice for SyncDevice {
         // Return an iterator over the completed positions
         let completed = self.pending_syncs.drain(..).collect::<Vec<_>>();
         Box::new(completed.into_iter())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_sync_device_basic_operations() -> std::io::Result<()> {
+        let temp_file = NamedTempFile::new()?;
+        temp_file.as_file().set_len(16 * 1024)?;
+        let path = temp_file.path();
+
+        // Create new SyncDevice
+        let mut device = SyncDevice::new(path)?;
+
+        // Create test data
+        let test_data = b"Hello, world!";
+        let mut aligned = AlignedSlice::new(test_data.len());
+        aligned.as_slice()[..test_data.len()].copy_from_slice(test_data);
+
+        // Test write without notification
+        let pos = WalPosition {
+            offset: 0,
+            rollover: 0,
+        };
+        device.write(pos, aligned, false)?;
+
+        // Verify no completions
+        let completions: Vec<_> = device.process_completions().collect();
+        assert!(completions.is_empty());
+
+        // Test write with notification
+        let mut aligned = AlignedSlice::new(test_data.len());
+        aligned.as_slice()[..test_data.len()].copy_from_slice(test_data);
+        device.write(pos, aligned, true)?;
+
+        // Verify completion
+        let completions: Vec<_> = device.process_completions().collect();
+        assert_eq!(completions, vec![pos]);
+
+        // Verify data was written correctly
+        let mut file = std::fs::File::open(path)?;
+        let mut buffer = vec![0; test_data.len()];
+        file.seek(std::io::SeekFrom::Start(pos.byte_offset()))?;
+        file.read_exact(&mut buffer)?;
+        assert_eq!(buffer, test_data);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_sync_device_multiple_writes() -> std::io::Result<()> {
+        let temp_file = NamedTempFile::new()?;
+        temp_file.as_file().set_len(16 * 1024)?;
+        let path = temp_file.path();
+
+        let mut device = SyncDevice::new(path)?;
+
+        // Write multiple positions
+        let pos1 = WalPosition {
+            offset: 0,
+            rollover: 0,
+        };
+        let pos2 = WalPosition {
+            offset: 1,
+            rollover: 0,
+        };
+
+        let aligned = AlignedSlice::new(10);
+        device.write(pos1, aligned, true)?;
+
+        let aligned = AlignedSlice::new(10);
+        device.write(pos2, aligned, true)?;
+
+        // Add write that shouldn't trigger completion
+        let pos3 = WalPosition {
+            offset: 2,
+            rollover: 0,
+        };
+        let aligned = AlignedSlice::new(10);
+        device.write(pos3, aligned, false)?;
+
+        // Verify both completions
+        let completions: Vec<_> = device.process_completions().collect();
+        assert_eq!(completions.len(), 2);
+        assert!(completions.contains(&pos1));
+        assert!(completions.contains(&pos2));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_sync_device_error_handling() -> std::io::Result<()> {
+        let temp_file = NamedTempFile::new()?;
+        temp_file.as_file().set_len(16 * 1024)?;
+        let path = temp_file.path();
+
+        let mut device = SyncDevice::new(path)?;
+
+        // Test invalid position
+        let invalid_pos = WalPosition {
+            offset: 100000,
+            rollover: 0,
+        };
+        let aligned = AlignedSlice::new(10);
+        let result = device.write(invalid_pos, aligned, true);
+        assert!(result.is_err());
+
+        Ok(())
     }
 }
