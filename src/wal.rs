@@ -5,7 +5,7 @@ use log::{debug, info, warn};
 use crate::uring::LinuxUring;
 
 #[cfg(target_os = "macos")]
-use crate::kqueue::KQueue;
+use crate::pwrite::MacOsAsyncIO;
 
 use crc32fast::Hasher;
 use std::fs::File;
@@ -219,7 +219,7 @@ impl Wal {
         #[cfg(target_os = "linux")]
         let dev = LinuxUring::new(path)?;
         #[cfg(target_os = "macos")]
-        let dev = KQueue::new(path)?;
+        let dev = MacOsAsyncIO::new(path)?;
 
         let capacity_bytes = path.metadata()?.len();
         if capacity_bytes % BLOCK_SIZE as u64 != 0 {
