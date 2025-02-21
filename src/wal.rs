@@ -218,6 +218,7 @@ impl Wal {
     ///   - mem:// - Use an in-memory device
     ///   - file:///path/to/file - Use a file-based device
     ///   - /path/to/file - Use a file-based device (backwards compatibility)
+    // AI! For mem devices, use the size from the path, so for example the URI would be mem://64
     pub fn open(uri: http::Uri) -> std::io::Result<(Self, WalIterator)> {
         info!("Starting recovery from {}", uri);
 
