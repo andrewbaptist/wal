@@ -97,7 +97,7 @@ impl PersistentDevice for KQueue {
         };
 
         // Submit the aio_write.
-        let result = unsafe { libc::aio_write(&mut (*aio_request_ptr).aio as *mut libc::aiocb) };
+        let result = unsafe { libc::aio_write(&mut (*aio_request_ptr).aio) };
         if result != 0 {
             // Reclaim the Box on failure.
             let _ = unsafe { Box::from_raw(aio_request_ptr) };
@@ -142,16 +142,18 @@ impl PersistentDevice for KQueue {
                 break;
             }
 
+            debug!("Found {nev} events");
+
             for i in 0..nev as usize {
                 let event = &events[i];
                 if event.filter == libc::EVFILT_AIO {
                     let aio_request_ptr = event.udata as *mut AioRequest;
-                    let aio_request = unsafe { Box::from_raw(aio_request_ptr) };
+                    let mut aio_request = unsafe { Box::from_raw(aio_request_ptr) };
 
                     let result = unsafe { libc::aio_error(&aio_request.aio) };
                     if result == 0 {
                         // Success case
-                        let bytes_written = unsafe { libc::aio_return(&aio_request.aio) };
+                        let bytes_written = unsafe { libc::aio_return(&mut aio_request.aio) };
                         if bytes_written >= 0 && aio_request.completion_data.notify {
                             debug!(
                                 "Completed write at {:?} ({} bytes)",
@@ -161,9 +163,7 @@ impl PersistentDevice for KQueue {
                         }
                     } else if result == libc::EINPROGRESS {
                         // Still in progress, put it back
-                        unsafe {
-                            let _ = Box::into_raw(aio_request);
-                        }
+                        let _ = Box::into_raw(aio_request);
                         continue;
                     } else {
                         // Error case
