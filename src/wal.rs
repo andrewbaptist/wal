@@ -213,171 +213,105 @@ impl Wal {
 
     // Note that truncated entries can be revived during a recover as truncation is not persistent.
     // The caller needs to handle this and should call truncate after processing all the entries.
-    /// Open the given path and begin recovery. The WalIterator is returned.
-    pub fn open(path: &Path) -> std::io::Result<(Self, WalIterator)> {
-        info!("Starting recovery from {path:?}");
-
-        // Check if we should force using specific devices
-        let use_sync = std::env::var("WAL_SYNC_DEVICE").is_ok();
-        let use_mem = std::env::var("WAL_MEM_DEVICE").is_ok();
+    /// Open the given URI and begin recovery. The WalIterator is returned.
+    /// Supported URIs:
+    ///   - mem:// - Use an in-memory device
+    ///   - file:///path/to/file - Use a file-based device
+    ///   - /path/to/file - Use a file-based device (backwards compatibility)
+    pub fn open(uri: http::Uri) -> std::io::Result<(Self, WalIterator)> {
+        info!("Starting recovery from {}", uri);
 
         let dev: Box<dyn PersistentDevice>;
 
-        if use_mem {
+        if uri.scheme_str() == Some("mem") {
+            // Use in-memory device
             dev = Box::new(crate::mem::MemDevice::new());
-        } else if use_sync {
-            dev = Box::new(SyncDevice::new(path)?);
         } else {
-            // Use platform-specific device implementations
-            #[cfg(target_os = "linux")]
-            {
-                dev = Box::new(LinuxUring::new(path)?);
-            }
-            #[cfg(target_os = "macos")]
-            {
-                dev = Box::new(MacOsAsyncIO::new(path)?);
-            }
-            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-            {
+            // Handle file paths
+            let path = if uri.scheme_str() == Some("file") {
+                uri.path()
+            } else {
+                uri.path()
+            };
+            let path = Path::new(path);
+
+            // Check if we should force using specific devices
+            let use_sync = std::env::var("WAL_SYNC_DEVICE").is_ok();
+
+            if use_sync {
                 dev = Box::new(SyncDevice::new(path)?);
+            } else {
+                // Use platform-specific device implementations
+                #[cfg(target_os = "linux")]
+                {
+                    dev = Box::new(LinuxUring::new(path)?);
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    dev = Box::new(MacOsAsyncIO::new(path)?);
+                }
+                #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+                {
+                    dev = Box::new(SyncDevice::new(path)?);
+                }
             }
-        }
 
-        let capacity_bytes = path.metadata()?.len();
-        if capacity_bytes % BLOCK_SIZE as u64 != 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "size {} is not a multiple of BLOCK_SIZE {}",
-                    capacity_bytes, BLOCK_SIZE
-                ),
-            ));
-        }
+            let capacity_bytes = if uri.scheme_str() == Some("mem") {
+                // Default memory device capacity
+                16 * 1024 * 1024 // 16MB
+            } else {
+                let path = Path::new(uri.path());
+                path.metadata()?.len()
+            };
+            if capacity_bytes % BLOCK_SIZE as u64 != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "size {} is not a multiple of BLOCK_SIZE {}",
+                        capacity_bytes, BLOCK_SIZE
+                    ),
+                ));
+            }
 
-        let mut wal = Wal {
-            dev,
-            capacity: (path.metadata()?.len() / BLOCK_SIZE as u64) as u32,
-            head: WalPosition {
-                offset: 0,
-                rollover: 0,
-            },
-            tail: WalPosition {
-                offset: 0,
-                rollover: 0,
-            },
-        };
-
-        let mut file = File::open(path)?;
-        // Follow entries from the start of the file until we hit one that is invalid. The general
-        // invariant is we can follow entries from the start of the file until we find an invalid
-        // entry. If we end up wrapping around, then we can end the search early without scanning
-        // through all valid entries.
-        loop {
-            file.seek(std::io::SeekFrom::Start(wal.head.byte_offset()))?;
-
-            let mut buffer = vec![0u8; BLOCK_SIZE as usize];
-            file.read_exact(&mut buffer)?;
-
-            // Read the header including the CRC.
-            let header = match EntryHeader::read_from_bytes(&buffer[..HEADER_SIZE]) {
-                Ok(h) => h,
-                Err(_) => break,
+            let mut wal = Wal {
+                dev,
+                capacity: (path.metadata()?.len() / BLOCK_SIZE as u64) as u32,
+                head: WalPosition {
+                    offset: 0,
+                    rollover: 0,
+                },
+                tail: WalPosition {
+                    offset: 0,
+                    rollover: 0,
+                },
             };
 
-            // We don't support writing 0 length entries. If we find a zero it means the data
-            // wasn't initialized.
-            // TODO: Enforce not allowing 0 length writes.
-            if header.len == 0 {
-                debug!("Found empty entry");
-                break;
-            }
-
-            // Back up and read the entire data in one buffer.
-            let mut buffer = vec![0u8; HEADER_SIZE + header.len as usize];
-            file.seek(std::io::SeekFrom::Start(wal.head.byte_offset()))?;
-            file.read_exact(&mut buffer)?;
-
-            // Verify CRC
-            let crc = header.compute_crc(&buffer);
-            if crc != header.crc {
-                warn!("open CRC mismatch {crc}, {:?}", header);
-                break;
-            }
-
-            debug!("Head {:?}, found {:?}", wal.head, header);
-            // Stop once we find an entry that goes backwards.
-            if header.rollover < wal.head.rollover {
-                debug!("Found older entry");
-                break;
-            }
-
-            // Otherwise find the next place to try and read from (TODO: Handle the overflow case).
-            let next_offset = wal.head.offset + header.num_blocks();
-            if next_offset >= wal.capacity {
-                debug!("Found end of file");
-                break;
-            }
-            wal.head.offset = next_offset;
-            wal.head.rollover = header.rollover;
-            debug!("Moving head to {:?}", wal.head);
-        }
-
-        // Its possible we got to the end and didn't find any more entries. Set our tail to be the
-        // 0 entry at the previous generation.
-        //
-        // We set the tail = head which means that the entire wal is valid and any appends will
-        // fail. The user must call trucate before using after a recover.
-        //
-        // Set the tail to be the starting position with a prior rollover count. We will try and
-        // find a better tail next.
-        if wal.head.rollover > 0 {
-            wal.tail = WalPosition {
-                offset: wal.head.offset,
-                rollover: wal.head.rollover - 1,
-            };
-
-            debug!("Finding tail starting from {:?}", wal.tail);
-
-            // We need to find the old tail based on where the head ended. Scan forward from where the
-            // head currently is until we find a valid entry that is one rollover behind us.
-            for offset in (wal.tail.offset..wal.capacity).step_by(BLOCK_SIZE as usize) {
-                debug!("Checking offset {}", offset);
+            let mut file = File::open(path)?;
+            // Follow entries from the start of the file until we hit one that is invalid. The general
+            // invariant is we can follow entries from the start of the file until we find an invalid
+            // entry. If we end up wrapping around, then we can end the search early without scanning
+            // through all valid entries.
+            loop {
+                file.seek(std::io::SeekFrom::Start(wal.head.byte_offset()))?;
 
                 let mut buffer = vec![0u8; BLOCK_SIZE as usize];
-
-                file.seek(std::io::SeekFrom::Start(offset as u64))?;
                 file.read_exact(&mut buffer)?;
 
                 // Read the header including the CRC.
-                let header = EntryHeader::read_from_bytes(&buffer[..HEADER_SIZE]);
+                let header = match EntryHeader::read_from_bytes(&buffer[..HEADER_SIZE]) {
+                    Ok(h) => h,
+                    Err(_) => break,
+                };
 
-                // This can happen because there was garbage before our first entry, keep scanning
-                // forwards until we find something useful.
-                // TODO: This might not ever happen
-                if header.is_err() {
-                    debug!("Found undecodable header, skipping");
-                    continue;
+                // We don't support writing 0 length entries. If we find a zero it means the data
+                // wasn't initialized.
+                // TODO: Enforce not allowing 0 length writes.
+                if header.len == 0 {
+                    debug!("Found empty entry");
+                    break;
                 }
 
-                let header = header.unwrap();
-
-                if header.rollover != wal.tail.rollover {
-                    debug!(
-                        "Found a header with the wrong rollover, skipping {:?}",
-                        header
-                    );
-                    continue;
-                }
-
-                println!(
-                    "Finding tail using header {:?} at offset {} ",
-                    header, offset
-                );
-
-                // TODO: Add a security mechanism against someone writing a bad block that looks like a
-                // header and checks out from a CRC perspective.
-                //
-                // Make sure the data really is valid by checking the CRC.
+                // Back up and read the entire data in one buffer.
                 let mut buffer = vec![0u8; HEADER_SIZE + header.len as usize];
                 file.seek(std::io::SeekFrom::Start(wal.head.byte_offset()))?;
                 file.read_exact(&mut buffer)?;
@@ -385,23 +319,109 @@ impl Wal {
                 // Verify CRC
                 let crc = header.compute_crc(&buffer);
                 if crc != header.crc {
-                    warn!("Tail CRC mismatch {crc}, {:?}", header);
-                    continue;
+                    warn!("open CRC mismatch {crc}, {:?}", header);
+                    break;
                 }
 
-                // At this point we found a valid old entry. Set this as our tail and we are done.
-                wal.tail.offset = offset;
-                break;
+                debug!("Head {:?}, found {:?}", wal.head, header);
+                // Stop once we find an entry that goes backwards.
+                if header.rollover < wal.head.rollover {
+                    debug!("Found older entry");
+                    break;
+                }
+
+                // Otherwise find the next place to try and read from (TODO: Handle the overflow case).
+                let next_offset = wal.head.offset + header.num_blocks();
+                if next_offset >= wal.capacity {
+                    debug!("Found end of file");
+                    break;
+                }
+                wal.head.offset = next_offset;
+                wal.head.rollover = header.rollover;
+                debug!("Moving head to {:?}", wal.head);
             }
+
+            // Its possible we got to the end and didn't find any more entries. Set our tail to be the
+            // 0 entry at the previous generation.
+            //
+            // We set the tail = head which means that the entire wal is valid and any appends will
+            // fail. The user must call trucate before using after a recover.
+            //
+            // Set the tail to be the starting position with a prior rollover count. We will try and
+            // find a better tail next.
+            if wal.head.rollover > 0 {
+                wal.tail = WalPosition {
+                    offset: wal.head.offset,
+                    rollover: wal.head.rollover - 1,
+                };
+
+                debug!("Finding tail starting from {:?}", wal.tail);
+
+                // We need to find the old tail based on where the head ended. Scan forward from where the
+                // head currently is until we find a valid entry that is one rollover behind us.
+                for offset in (wal.tail.offset..wal.capacity).step_by(BLOCK_SIZE as usize) {
+                    debug!("Checking offset {}", offset);
+
+                    let mut buffer = vec![0u8; BLOCK_SIZE as usize];
+
+                    file.seek(std::io::SeekFrom::Start(offset as u64))?;
+                    file.read_exact(&mut buffer)?;
+
+                    // Read the header including the CRC.
+                    let header = EntryHeader::read_from_bytes(&buffer[..HEADER_SIZE]);
+
+                    // This can happen because there was garbage before our first entry, keep scanning
+                    // forwards until we find something useful.
+                    // TODO: This might not ever happen
+                    if header.is_err() {
+                        debug!("Found undecodable header, skipping");
+                        continue;
+                    }
+
+                    let header = header.unwrap();
+
+                    if header.rollover != wal.tail.rollover {
+                        debug!(
+                            "Found a header with the wrong rollover, skipping {:?}",
+                            header
+                        );
+                        continue;
+                    }
+
+                    println!(
+                        "Finding tail using header {:?} at offset {} ",
+                        header, offset
+                    );
+
+                    // TODO: Add a security mechanism against someone writing a bad block that looks like a
+                    // header and checks out from a CRC perspective.
+                    //
+                    // Make sure the data really is valid by checking the CRC.
+                    let mut buffer = vec![0u8; HEADER_SIZE + header.len as usize];
+                    file.seek(std::io::SeekFrom::Start(wal.head.byte_offset()))?;
+                    file.read_exact(&mut buffer)?;
+
+                    // Verify CRC
+                    let crc = header.compute_crc(&buffer);
+                    if crc != header.crc {
+                        warn!("Tail CRC mismatch {crc}, {:?}", header);
+                        continue;
+                    }
+
+                    // At this point we found a valid old entry. Set this as our tail and we are done.
+                    wal.tail.offset = offset;
+                    break;
+                }
+            }
+
+            let iterator = WalIterator::new(file, wal.tail, wal.head, wal.capacity);
+            info!("Recovering from {:?} to {:?}", wal.tail, wal.head);
+            Ok((wal, iterator))
         }
 
-        let iterator = WalIterator::new(file, wal.tail, wal.head, wal.capacity);
-        info!("Recovering from {:?} to {:?}", wal.tail, wal.head);
-        Ok((wal, iterator))
-    }
-
-    pub fn process_completions(&mut self) -> impl Iterator<Item = WalPosition> {
-        self.dev.process_completions()
+        pub fn process_completions(&mut self) -> impl Iterator<Item = WalPosition> {
+            self.dev.process_completions()
+        }
     }
 }
 
