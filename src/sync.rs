@@ -12,11 +12,12 @@ pub struct SyncDevice {
 }
 
 impl SyncDevice {
+    // The user must create the file before calling new.
     pub fn new(path: &Path) -> std::io::Result<Self> {
         let file = OpenOptions::new()
             .write(true)
             .truncate(false)
-            .create(true)
+            .create(false)
             .open(path)?;
 
         Ok(Self {
