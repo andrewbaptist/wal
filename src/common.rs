@@ -16,7 +16,7 @@ pub trait PersistentDevice: Send {
     fn process_completions(&mut self) -> Box<dyn Iterator<Item = WalPosition>>;
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct WalPosition {
     // block offset into the file
     pub offset: u32,
