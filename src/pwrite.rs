@@ -68,6 +68,7 @@ impl MacOsAsyncIO {
     }
 }
 
+// AI! Implement the read method for this struct.
 impl PersistentDevice for MacOsAsyncIO {
     fn write(&mut self, pos: WalPosition, data: AlignedSlice, notify: bool) -> std::io::Result<()> {
         let data = CompletionData {
