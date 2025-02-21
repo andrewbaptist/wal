@@ -14,6 +14,8 @@ pub trait PersistentDevice: Send {
     /// process_completions must be called periodically by the client to determine which previously
     /// written data has been synced to disk. It will write any completed data to the given channel.
     fn process_completions(&mut self) -> Box<dyn Iterator<Item = WalPosition>>;
+
+    // AI! Add a method read() which pakes a WalPostion and a length and returns the data in it.
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
