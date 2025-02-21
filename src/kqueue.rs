@@ -33,7 +33,7 @@ struct AioRequest {
     completion_data: CompletionData,
 }
 
-impl MacKQueue {
+impl KQueue {
     pub fn new(path: &Path) -> std::io::Result<Self> {
         let path = CString::new(path.as_os_str().as_bytes())?;
         let fd = unsafe { libc::open(path.as_ptr(), O_WRONLY | F_NOCACHE, 0o644) };
