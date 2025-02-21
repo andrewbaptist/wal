@@ -217,15 +217,28 @@ impl Wal {
     pub fn open(path: &Path) -> std::io::Result<(Self, WalIterator)> {
         info!("Starting recovery from {path:?}");
 
-        // Handle running on any platform.
-        #[allow(unused_variables)]
-        let dev = SyncDevice::new(path)?;
+        // Check if we should force using the sync device
+        let use_sync = std::env::var("WAL_SYNC_DEVICE").is_ok();
 
-        // Use platform-specific device implementations
-        #[cfg(target_os = "linux")]
-        let dev = LinuxUring::new(path)?;
-        #[cfg(target_os = "macos")]
-        let dev = MacOsAsyncIO::new(path)?;
+        let dev: Box<dyn PersistentDevice>;
+
+        if use_sync {
+            dev = Box::new(SyncDevice::new(path)?);
+        } else {
+            // Use platform-specific device implementations
+            #[cfg(target_os = "linux")]
+            {
+                dev = Box::new(LinuxUring::new(path)?);
+            }
+            #[cfg(target_os = "macos")]
+            {
+                dev = Box::new(MacOsAsyncIO::new(path)?);
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            {
+                dev = Box::new(SyncDevice::new(path)?);
+            }
+        }
 
         let capacity_bytes = path.metadata()?.len();
         if capacity_bytes % BLOCK_SIZE as u64 != 0 {
@@ -239,7 +252,7 @@ impl Wal {
         }
 
         let mut wal = Wal {
-            dev: Box::new(dev),
+            dev,
             capacity: (path.metadata()?.len() / BLOCK_SIZE as u64) as u32,
             head: WalPosition {
                 offset: 0,
