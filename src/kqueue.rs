@@ -1,6 +1,7 @@
 use crate::AlignedSlice;
 use crate::WalPosition;
 use log::debug;
+use log::warn;
 
 use crate::PersistentDevice;
 
