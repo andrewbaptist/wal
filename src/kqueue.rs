@@ -97,7 +97,7 @@ impl PersistentDevice for KQueue {
         };
 
         // Submit the aio_write.
-        let result = unsafe { libc::aio_write(&mut (*aio_request_ptr).aio) };
+        let result = unsafe { libc::aio_write(&mut (*aio_request_ptr).aio as *mut libc::aiocb) };
         if result != 0 {
             // Reclaim the Box on failure.
             let _ = unsafe { Box::from_raw(aio_request_ptr) };
