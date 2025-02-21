@@ -219,7 +219,7 @@ impl Wal {
         #[cfg(target_os = "linux")]
         let dev = LinuxUring::new(path)?;
         #[cfg(target_os = "macos")]
-        let dev = MacOsAsyncIO::new(path)?;
+        let dev = KQueue::new(path)?;
 
         let capacity_bytes = path.metadata()?.len();
         if capacity_bytes % BLOCK_SIZE as u64 != 0 {

@@ -70,36 +70,66 @@ impl PersistentDevice for KQueue {
             notify,
         };
 
-        let mut aio: libc::aiocb;
-        unsafe {
-            aio = libc::aiocb {
-                aio_fildes: self.fd,
-                aio_offset: pos.byte_offset() as i64,
-                aio_buf: completion_data.slice.buffer_ptr as *mut c_void,
-                aio_nbytes: completion_data.slice.size() as usize,
-                ..std::mem::zeroed()
-            };
-        }
-
         // Allocate AioRequest on the heap.
         let aio_request = Box::new(AioRequest {
-            aio: aio,
+            aio: unsafe { std::mem::zeroed() },
             completion_data,
         });
 
         // Convert to raw pointer to manage ownership.
         let aio_request_ptr = Box::into_raw(aio_request);
 
-        aio.aio_sigevent.sigev_notify = SIGEV_KEVENT;
-        aio.aio_sigevent.sigev_signo = self.kq;
-        aio.aio_sigevent.sigev_value = libc::sigval {
-            sival_ptr: aio_request_ptr as *mut c_void,
-        };
+        // Initialize the AIO control block
+        unsafe {
+            (*aio_request_ptr).aio = libc::aiocb {
+                aio_fildes: self.fd,
+                aio_offset: pos.byte_offset() as i64,
+                aio_buf: (*aio_request_ptr).completion_data.slice.buffer_ptr as *mut c_void,
+                aio_nbytes: (*aio_request_ptr).completion_data.slice.size() as usize,
+                aio_sigevent: libc::sigevent {
+                    sigev_notify: SIGEV_KEVENT,
+                    sigev_signo: self.kq,
+                    sigev_value: libc::sigval {
+                        sival_ptr: aio_request_ptr as *mut c_void,
+                    },
+                    ..std::mem::zeroed()
+                },
+                ..std::mem::zeroed()
+            };
+        }
 
         // Submit the aio_write.
         let result = unsafe { libc::aio_write(&mut (*aio_request_ptr).aio) };
         if result != 0 {
             // Reclaim the Box on failure.
+            let _ = unsafe { Box::from_raw(aio_request_ptr) };
+            return Err(std::io::Error::last_os_error());
+        }
+
+        // Register the AIO event with kqueue
+        let mut kev = libc::kevent {
+            ident: self.fd as usize,
+            filter: libc::EVFILT_AIO,
+            flags: libc::EV_ADD | libc::EV_ENABLE,
+            fflags: 0,
+            data: 0,
+            udata: aio_request_ptr as *mut c_void,
+        };
+
+        let result = unsafe {
+            libc::kevent(
+                self.kq,
+                &mut kev as *mut libc::kevent,
+                1,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
+        };
+
+        if result == -1 {
+            // Cancel the AIO request and clean up
+            unsafe { libc::aio_cancel(self.fd, &mut (*aio_request_ptr).aio) };
             let _ = unsafe { Box::from_raw(aio_request_ptr) };
             return Err(std::io::Error::last_os_error());
         }
