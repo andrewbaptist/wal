@@ -217,14 +217,15 @@ impl Wal {
     pub fn open(path: &Path) -> std::io::Result<(Self, WalIterator)> {
         info!("Starting recovery from {path:?}");
 
-        // Check if we should force using the sync device
+        // Check if we should force using specific devices
         let use_sync = std::env::var("WAL_SYNC_DEVICE").is_ok();
-
-        // AI! Add a env variable to use the MemDevice
+        let use_mem = std::env::var("WAL_MEM_DEVICE").is_ok();
 
         let dev: Box<dyn PersistentDevice>;
 
-        if use_sync {
+        if use_mem {
+            dev = Box::new(crate::mem::MemDevice::new());
+        } else if use_sync {
             dev = Box::new(SyncDevice::new(path)?);
         } else {
             // Use platform-specific device implementations
