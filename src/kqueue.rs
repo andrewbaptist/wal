@@ -21,8 +21,8 @@ struct CompletionData {
     notify: bool,
 }
 
-/// MacKQueue uses kqueue and aio to write to the underlying device.
-pub struct MacKQueue {
+/// KQueue uses kqueue and aio to write to the underlying device.
+pub struct KQueue {
     fd: RawFd,
     kq: RawFd,
 }
@@ -48,11 +48,11 @@ impl MacKQueue {
             return Err(err);
         }
 
-        Ok(MacKQueue { fd, kq })
+        Ok(KQueue { fd, kq })
     }
 }
 
-impl Drop for MacKQueue {
+impl Drop for KQueue {
     fn drop(&mut self) {
         unsafe {
             libc::close(self.fd);
@@ -61,7 +61,7 @@ impl Drop for MacKQueue {
     }
 }
 
-impl PersistentDevice for MacKQueue {
+impl PersistentDevice for KQueue {
     fn write(&mut self, pos: WalPosition, data: AlignedSlice, notify: bool) -> std::io::Result<()> {
         let completion_data = CompletionData {
             wal_position: pos,
