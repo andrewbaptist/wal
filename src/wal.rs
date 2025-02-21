@@ -225,8 +225,10 @@ impl Wal {
         let dev: Box<dyn PersistentDevice>;
 
         if uri.scheme_str() == Some("mem") {
-            // Use in-memory device
-            dev = Box::new(crate::mem::MemDevice::new());
+            // Parse size from path (e.g. mem://64 means 64 blocks)
+            let blocks = uri.path().parse::<u32>().unwrap_or(1024); // Default to 1024 blocks
+            // Use in-memory device with specified size
+            dev = Box::new(crate::mem::MemDevice::new(blocks));
         } else {
             // Handle file paths
             let path = if uri.scheme_str() == Some("file") {
@@ -258,8 +260,9 @@ impl Wal {
             }
 
             let capacity_bytes = if uri.scheme_str() == Some("mem") {
-                // Default memory device capacity
-                16 * 1024 * 1024 // 16MB
+                // Calculate capacity from blocks
+                let blocks = uri.path().parse::<u32>().unwrap_or(1024);
+                (blocks as u64) * BLOCK_SIZE as u64
             } else {
                 let path = Path::new(uri.path());
                 path.metadata()?.len()
