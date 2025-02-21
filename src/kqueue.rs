@@ -1,5 +1,6 @@
 use crate::AlignedSlice;
 use crate::WalPosition;
+use log::debug;
 
 use crate::PersistentDevice;
 
@@ -134,6 +135,7 @@ impl PersistentDevice for MacKQueue {
                 if result == 0 {
                     let bytes_written = unsafe { libc::aio_return(&mut aio_request.aio) };
                     if bytes_written >= 0 && aio_request.completion_data.notify {
+                        debug!("Completed write at {:?}", aio_request.completion_data.wal_position);
                         completed_positions.push(aio_request.completion_data.wal_position);
                     }
                 }

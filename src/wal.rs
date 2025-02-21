@@ -1,4 +1,5 @@
 use crate::common::*;
+use log::{debug, info, warn};
 
 #[cfg(target_os = "linux")]
 use crate::uring::LinuxUring;
@@ -84,7 +85,7 @@ impl Iterator for WalIterator {
                 )))
             }
         };
-        println!("Found header {:?}", header);
+        debug!("Found header {:?}", header);
         // Now we need to create a big enough buffer to hold the entire content if its bigger than
         // one block. We could use an aligned slice, but its not strictly necessary.
         let mut buffer = vec![0u8; HEADER_SIZE + header.len as usize];
@@ -178,7 +179,7 @@ impl Wal {
             rollover: self.head.rollover,
             len: data.len() as u32,
         };
-        println!("Writing header {:?}", header);
+        debug!("Writing header {:?}", header);
 
         buffer[..HEADER_SIZE].copy_from_slice(header.as_bytes());
         buffer[HEADER_SIZE..HEADER_SIZE + data.len()].copy_from_slice(data);
@@ -212,7 +213,7 @@ impl Wal {
     // The caller needs to handle this and should call truncate after processing all the entries.
     /// Open the given path and begin recovery. The WalIterator is returned.
     pub fn open(path: &Path) -> std::io::Result<(Self, WalIterator)> {
-        println!("Start recovery from {path:?}");
+        info!("Starting recovery from {path:?}");
 
         // TODO: Different device on mac.
         #[cfg(target_os = "linux")]
@@ -265,7 +266,7 @@ impl Wal {
             // wasn't initialized.
             // TODO: Enforce not allowing 0 length writes.
             if header.len == 0 {
-                println!("Found empty entry");
+                debug!("Found empty entry");
                 break;
             }
 
@@ -277,26 +278,26 @@ impl Wal {
             // Verify CRC
             let crc = header.compute_crc(&buffer);
             if crc != header.crc {
-                println!("open CRC mismatch {crc}, {:?}", header);
+                warn!("open CRC mismatch {crc}, {:?}", header);
                 break;
             }
 
-            println!("Head {:?}, found {:?}", wal.head, header);
+            debug!("Head {:?}, found {:?}", wal.head, header);
             // Stop once we find an entry that goes backwards.
             if header.rollover < wal.head.rollover {
-                println!("Found older entry");
+                debug!("Found older entry");
                 break;
             }
 
             // Otherwise find the next place to try and read from (TODO: Handle the overflow case).
             let next_offset = wal.head.offset + header.num_blocks();
             if next_offset >= wal.capacity {
-                println!("Found end of file");
+                debug!("Found end of file");
                 break;
             }
             wal.head.offset = next_offset;
             wal.head.rollover = header.rollover;
-            println!("Moving head to {:?}", wal.head);
+            debug!("Moving head to {:?}", wal.head);
         }
 
         // Its possible we got to the end and didn't find any more entries. Set our tail to be the
@@ -313,12 +314,12 @@ impl Wal {
                 rollover: wal.head.rollover - 1,
             };
 
-            println!("Finding tail starting from {:?}", wal.tail);
+            debug!("Finding tail starting from {:?}", wal.tail);
 
             // We need to find the old tail based on where the head ended. Scan forward from where the
             // head currently is until we find a valid entry that is one rollover behind us.
             for offset in (wal.tail.offset..wal.capacity).step_by(BLOCK_SIZE as usize) {
-                println!("offset is {} ", offset);
+                debug!("Checking offset {}", offset);
 
                 let mut buffer = vec![0u8; BLOCK_SIZE as usize];
 
@@ -332,14 +333,14 @@ impl Wal {
                 // forwards until we find something useful.
                 // TODO: This might not ever happen
                 if header.is_err() {
-                    println!("Found an undecodable header, skiping");
+                    debug!("Found undecodable header, skipping");
                     continue;
                 }
 
                 let header = header.unwrap();
 
                 if header.rollover != wal.tail.rollover {
-                    println!(
+                    debug!(
                         "Found a header with the wrong rollover, skipping {:?}",
                         header
                     );
@@ -362,7 +363,7 @@ impl Wal {
                 // Verify CRC
                 let crc = header.compute_crc(&buffer);
                 if crc != header.crc {
-                    println!("find tail CRC mismatch {crc}, {:?}", header);
+                    warn!("Tail CRC mismatch {crc}, {:?}", header);
                     continue;
                 }
 
@@ -373,7 +374,7 @@ impl Wal {
         }
 
         let iterator = WalIterator::new(file, wal.tail, wal.head, wal.capacity);
-        println!("Recovering from {:?} to {:?}", wal.tail, wal.head);
+        info!("Recovering from {:?} to {:?}", wal.tail, wal.head);
         Ok((wal, iterator))
     }
 

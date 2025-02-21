@@ -1,4 +1,5 @@
 use crate::common::*;
+use log::debug;
 //use crossbeam::channel::{self, TrySendError};
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
@@ -55,6 +56,7 @@ impl MacOsAsyncIO {
 
                 // Handle completion notification
                 if res >= 0 && data.notify {
+                    debug!("pwrite completed at {:?}", data.wal_position);
                     let _ = completion_sender.send(data.wal_position);
                 }
 

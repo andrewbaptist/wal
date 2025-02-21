@@ -1,3 +1,4 @@
+use log::{debug, info};
 use std::env;
 use std::path::Path;
 use std::sync::mpsc;
@@ -25,11 +26,12 @@ const NUM_TO_WRITE: usize = 2;
 
 // This demonstrates how to use the wal. Open and begin recovery. Once it is recovered, then
 fn main() {
+    env_logger::init();
     let args: Vec<String> = env::args().collect();
 
     let (mut wal, entries) = Wal::open(Path::new(&args[1])).unwrap();
     for e in entries {
-        println!("Recovered {:?}", e.unwrap().0);
+        info!("Recovered {:?}", e.unwrap().0);
     }
 
     // Wrap in a mutex to share across the writing and completion threads.
@@ -44,21 +46,21 @@ fn main() {
                 *pos = i as u8;
             }
             let mut num_outstanding = 0;
-            println!("Start writing");
+            info!("Start writing");
 
             for i in 0..NUM_TO_WRITE {
                 let loc = wal.append(&data).unwrap();
-                println!("Wrote {i} at loc {loc:?}");
+                info!("Wrote {i} at loc {loc:?}");
                 num_outstanding += 1;
                 num_outstanding -= notify_completions(&mut wal, &tx);
             }
-            println!("Finished writing - waiting for {num_outstanding} lagging completion");
+            info!("Finished writing - waiting for {num_outstanding} lagging completion");
 
             while num_outstanding > 0 {
                 sleep(Duration::from_millis(1));
                 num_outstanding -= notify_completions(&mut wal, &tx);
             }
-            println!("All synced to disk");
+            info!("All synced to disk");
         });
 
         // This thread waits for data to be completed and returns it to the caller.
@@ -77,7 +79,7 @@ fn notify_completions(wal: &mut Wal, tx: &mpsc::Sender<WalPosition>) -> usize {
     let mut count = 0;
     for pos in wal.process_completions() {
         tx.send(pos).unwrap();
-        println!("Completion for {:?}", pos);
+        debug!("Completion for {:?}", pos);
         count += 1;
     }
     count
