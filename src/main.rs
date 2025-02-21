@@ -6,22 +6,8 @@ use std::thread;
 use std::thread::sleep;
 use std::time::Duration;
 
-use crate::common::*;
-use crate::wal::*;
-
-pub mod common;
-pub mod mem;
-pub mod sync;
-pub mod wal;
-
-#[cfg(target_os = "linux")]
-pub mod uring;
-
-#[cfg(target_os = "macos")]
-pub mod pwrite;
-
-#[cfg(target_os = "macos")]
-pub mod kqueue;
+use wal::common::WalPosition;
+use wal::wal::Wal;
 
 const NUM_TO_WRITE: usize = 2;
 

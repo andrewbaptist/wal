@@ -1,9 +1,9 @@
-use crate::AlignedSlice;
-use crate::WalPosition;
+use crate::common::AlignedSlice;
+use crate::common::WalPosition;
 use log::debug;
 use log::warn;
 
-use crate::PersistentDevice;
+use crate::common::PersistentDevice;
 
 use libc::{self, c_void, F_NOCACHE, O_NONBLOCK, O_WRONLY};
 use std::ffi::c_int;
