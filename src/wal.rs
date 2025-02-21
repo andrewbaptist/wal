@@ -218,16 +218,16 @@ impl Wal {
     ///   - mem:// - Use an in-memory device
     ///   - file:///path/to/file - Use a file-based device
     ///   - /path/to/file - Use a file-based device (backwards compatibility)
+    // AI! For mem devices, use the size from the path, so for example the URI would be mem://64
     pub fn open(uri: http::Uri) -> std::io::Result<(Self, WalIterator)> {
         info!("Starting recovery from {}", uri);
 
-        let dev: Box<dyn PersistentDevice>;
-
-        if uri.scheme_str() == Some("mem") {
+        let (dev, capacity_bytes) = if uri.scheme_str() == Some("mem") {
             // Parse size from path (e.g. mem://64 means 64 blocks)
             let blocks = uri.path().parse::<u32>().unwrap_or(1024); // Default to 1024 blocks
                                                                     // Use in-memory device with specified size
             dev = Box::new(crate::mem::MemDevice::new(blocks));
+            (dev, blocks * BLOCK_SIZE)
         } else {
             // Handle file paths
             let path = if uri.scheme_str() == Some("file") {
@@ -266,7 +266,9 @@ impl Wal {
                 let path = Path::new(uri.path());
                 path.metadata()?.len()
             };
-        }
+            (dev, capacity_bytes)
+        };
+
         if capacity_bytes % BLOCK_SIZE as u64 != 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
