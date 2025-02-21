@@ -10,9 +10,7 @@ use crate::pwrite::MacOsAsyncIO;
 use crate::sync::SyncDevice;
 
 use crc32fast::Hasher;
-use std::fs::File;
 use std::io::Error;
-use std::io::{Read, Seek};
 use std::path::Path;
 use zerocopy::{FromBytes, IntoBytes};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
@@ -42,18 +40,24 @@ impl EntryHeader {
     }
 }
 
-pub struct WalIterator {
-    file: File,
+pub struct WalIterator<'a> {
+    dev: &'a Box<dyn PersistentDevice>,
     current: WalPosition,
     end: WalPosition,
     // number of blocks in the file.
     capacity: u32,
 }
 
+// AI! Fix the lifetime issue
 impl WalIterator {
-    pub fn new(file: File, start: WalPosition, end: WalPosition, capacity: u32) -> Self {
+    pub fn new(
+        dev: &Box<dyn PersistentDevice>,
+        start: WalPosition,
+        end: WalPosition,
+        capacity: u32,
+    ) -> Self {
         WalIterator {
-            file,
+            dev,
             current: start,
             end,
             capacity,
@@ -70,14 +74,10 @@ impl Iterator for WalIterator {
         }
 
         // Read header
-        self.file
-            .seek(std::io::SeekFrom::Start(self.current.byte_offset()))
+        let buffer = self
+            .dev
+            .read(self.current.byte_offset(), HEADER_SIZE)
             .ok()?;
-
-        // Create a buffer to read the header.
-        let mut buffer = vec![0u8; HEADER_SIZE];
-        self.file.read_exact(&mut buffer).ok()?;
-
         let header = match EntryHeader::read_from_bytes(&buffer) {
             Ok(h) => h,
             Err(_) => {
@@ -90,11 +90,13 @@ impl Iterator for WalIterator {
         debug!("Found header {:?}", header);
         // Now we need to create a big enough buffer to hold the entire content if its bigger than
         // one block. We could use an aligned slice, but its not strictly necessary.
-        let mut buffer = vec![0u8; HEADER_SIZE + header.len as usize];
-        self.file
-            .seek(std::io::SeekFrom::Start(self.current.byte_offset()))
+        let buffer = self
+            .dev
+            .read(
+                self.current.byte_offset(),
+                HEADER_SIZE + header.len as usize,
+            )
             .ok()?;
-        self.file.read_exact(&mut buffer).ok()?;
 
         // Verify CRC - somewhat redundant, but done anyways.
         let crc = header.compute_crc(&buffer);
@@ -221,13 +223,13 @@ impl Wal {
     pub fn open(uri: http::Uri) -> std::io::Result<(Self, WalIterator)> {
         info!("Starting recovery from {}", uri);
 
-        let (dev, capacity_bytes) = if uri.scheme_str() == Some("mem") {
+        let (mut dev, capacity) = if uri.scheme_str() == Some("mem") {
             // Parse size from path (e.g. mem://64 means 64 blocks)
             let blocks = uri.path().parse::<u32>().unwrap_or(1024); // Default to 1024 blocks
-                                                                    // Use in-memory device with specified size
-            dev = Box::new(crate::mem::MemDevice::new(blocks));
-            (dev, blocks * BLOCK_SIZE)
+            let dev: Box<dyn PersistentDevice> = Box::new(crate::mem::MemDevice::new(blocks));
+            (dev, blocks)
         } else {
+            let dev: Box<dyn PersistentDevice>;
             // Handle file paths
             let path = if uri.scheme_str() == Some("file") {
                 uri.path()
@@ -265,22 +267,22 @@ impl Wal {
                 let path = Path::new(uri.path());
                 path.metadata()?.len()
             };
-            (dev, capacity_bytes)
+            if capacity_bytes % BLOCK_SIZE as u64 != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "size {} is not a multiple of BLOCK_SIZE {}",
+                        capacity_bytes, BLOCK_SIZE
+                    ),
+                ));
+            }
+            let capacity = (capacity_bytes / BLOCK_SIZE as u64) as u32;
+            (dev, capacity)
         };
-
-        if capacity_bytes % BLOCK_SIZE as u64 != 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "size {} is not a multiple of BLOCK_SIZE {}",
-                    capacity_bytes, BLOCK_SIZE
-                ),
-            ));
-        }
 
         let mut wal = Wal {
             dev,
-            capacity: (path.metadata()?.len() / BLOCK_SIZE as u64) as u32,
+            capacity: capacity,
             head: WalPosition {
                 offset: 0,
                 rollover: 0,
@@ -291,16 +293,12 @@ impl Wal {
             },
         };
 
-        let mut file = File::open(path)?;
         // Follow entries from the start of the file until we hit one that is invalid. The general
         // invariant is we can follow entries from the start of the file until we find an invalid
         // entry. If we end up wrapping around, then we can end the search early without scanning
         // through all valid entries.
         loop {
-            file.seek(std::io::SeekFrom::Start(wal.head.byte_offset()))?;
-
-            let mut buffer = vec![0u8; BLOCK_SIZE as usize];
-            file.read_exact(&mut buffer)?;
+            let buffer = dev.read(wal.head.byte_offset(), BLOCK_SIZE as usize)?;
 
             // Read the header including the CRC.
             let header = match EntryHeader::read_from_bytes(&buffer[..HEADER_SIZE]) {
@@ -317,9 +315,7 @@ impl Wal {
             }
 
             // Back up and read the entire data in one buffer.
-            let mut buffer = vec![0u8; HEADER_SIZE + header.len as usize];
-            file.seek(std::io::SeekFrom::Start(wal.head.byte_offset()))?;
-            file.read_exact(&mut buffer)?;
+            let buffer = dev.read(wal.head.byte_offset(), HEADER_SIZE + header.len as usize)?;
 
             // Verify CRC
             let crc = header.compute_crc(&buffer);
@@ -367,10 +363,7 @@ impl Wal {
             for offset in (wal.tail.offset..wal.capacity).step_by(BLOCK_SIZE as usize) {
                 debug!("Checking offset {}", offset);
 
-                let mut buffer = vec![0u8; BLOCK_SIZE as usize];
-
-                file.seek(std::io::SeekFrom::Start(offset as u64))?;
-                file.read_exact(&mut buffer)?;
+                let mut buffer = dev.read(wal.head.byte_offset(), BLOCK_SIZE as usize)?;
 
                 // Read the header including the CRC.
                 let header = EntryHeader::read_from_bytes(&buffer[..HEADER_SIZE]);
@@ -402,9 +395,7 @@ impl Wal {
                 // header and checks out from a CRC perspective.
                 //
                 // Make sure the data really is valid by checking the CRC.
-                let mut buffer = vec![0u8; HEADER_SIZE + header.len as usize];
-                file.seek(std::io::SeekFrom::Start(wal.head.byte_offset()))?;
-                file.read_exact(&mut buffer)?;
+                let buffer = dev.read(wal.head.byte_offset(), HEADER_SIZE + header.len as usize)?;
 
                 // Verify CRC
                 let crc = header.compute_crc(&buffer);
@@ -419,7 +410,7 @@ impl Wal {
             }
         }
 
-        let iterator = WalIterator::new(file, wal.tail, wal.head, wal.capacity);
+        let iterator = WalIterator::new(&dev, wal.tail, wal.head, wal.capacity);
         info!("Recovering from {:?} to {:?}", wal.tail, wal.head);
         Ok((wal, iterator))
     }
