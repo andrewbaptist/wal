@@ -5,7 +5,7 @@ use log::{debug, info, warn};
 use crate::uring::LinuxUring;
 
 #[cfg(target_os = "macos")]
-use crate::pwrite::MacOsAsyncIO;
+use crate::kqueue::KQueue;
 
 use crc32fast::Hasher;
 use std::fs::File;
