@@ -13,7 +13,11 @@ pub struct SyncDevice {
 
 impl SyncDevice {
     pub fn new(path: &Path) -> std::io::Result<Self> {
-        let file = OpenOptions::new().write(true).create(true).open(path)?;
+        let file = OpenOptions::new()
+            .write(true)
+            .truncate(false)
+            .create(true)
+            .open(path)?;
 
         Ok(Self {
             file,
