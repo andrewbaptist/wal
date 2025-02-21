@@ -43,28 +43,20 @@ fn main() {
             for (i, pos) in data.iter_mut().enumerate() {
                 *pos = i as u8;
             }
-            let mut num_outstanding = NUM_TO_WRITE;
+            let mut num_outstanding = 0;
             println!("Start writing");
+
             for i in 0..NUM_TO_WRITE {
                 let loc = wal.append(&data).unwrap();
                 println!("Wrote {i} at loc {loc:?}");
-                for pos in wal.process_completions() {
-                    tx.send(pos).unwrap();
-                    println!("Completion for {:?}", pos);
-                    num_outstanding -= 1;
-                }
+                num_outstanding += 1;
+                num_outstanding -= notify_completions(&mut wal, &tx);
             }
-            println!("Finished writing - begin waiting for {num_outstanding} completion");
+            println!("Finished writing - waiting for {num_outstanding} lagging completion");
 
             while num_outstanding > 0 {
-                // TODO: Dynamically adjust the sleep to only check for comletions when there are outstanding
-                // writes.
-                sleep(Duration::from_millis(10));
-                for pos in wal.process_completions() {
-                    tx.send(pos).unwrap();
-                    println!("Completion for {:?}", pos);
-                    num_outstanding -= 1;
-                }
+                sleep(Duration::from_millis(1));
+                num_outstanding -= notify_completions(&mut wal, &tx);
             }
             println!("All synced to disk");
         });
@@ -79,4 +71,14 @@ fn main() {
             }
         });
     });
+}
+
+fn notify_completions(wal: &mut Wal, tx: &mpsc::Sender<WalPosition>) -> usize {
+    let mut count = 0;
+    for pos in wal.process_completions() {
+        tx.send(pos).unwrap();
+        println!("Completion for {:?}", pos);
+        count += 1;
+    }
+    count
 }
