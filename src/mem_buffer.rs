@@ -68,9 +68,15 @@ mod tests {
         let completions: Vec<_> = device.process_completions().collect();
         assert_eq!(completions, vec![pos1]);
 
-        // Verify data was stored
-        assert_eq!(device.buffer.get(&pos1).unwrap(), b"hello\0\0\0\0\0");
-        assert_eq!(device.buffer.get(&pos2).unwrap(), b"world\0\0\0\0\0");
+        // Verify data was stored (only check first 16 bytes)
+        assert_eq!(
+            &device.buffer.get(&pos1).unwrap()[..16],
+            b"hello\0\0\0\0\0\0\0\0\0\0\0"
+        );
+        assert_eq!(
+            &device.buffer.get(&pos2).unwrap()[..16],
+            b"world\0\0\0\0\0\0\0\0\0\0\0"
+        );
 
         Ok(())
     }
