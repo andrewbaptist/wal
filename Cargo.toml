@@ -19,3 +19,4 @@ fcntl = "0.1"
 [target.'cfg(target_os = "macos")'.dependencies]
 crossbeam = "0.8.4"
 libc = "0.2"
+nix = { version = "0.29", features = ["ioctl", "fs"] }

@@ -18,6 +18,9 @@ pub mod uring;
 #[cfg(target_os = "macos")]
 pub mod pwrite;
 
+#[cfg(target_os = "macos")]
+pub mod kqueue;
+
 const NUM_TO_WRITE: usize = 2;
 
 // This demonstrates how to use the wal. Open and begin recovery. Once it is recovered, then

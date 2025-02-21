@@ -53,18 +53,14 @@ pub struct AlignedSlice {
     pub blocks: u32,
 }
 
-unsafe impl Send for AlignedSlice {
-}
+unsafe impl Send for AlignedSlice {}
 
 impl AlignedSlice {
     pub fn new(raw_size: usize) -> Self {
         let blocks = (raw_size).div_ceil(BLOCK_SIZE as usize) as u32;
         let layout = AlignedSlice::get_layout(blocks);
         let buffer_ptr = unsafe { alloc_zeroed(layout) };
-        AlignedSlice {
-            buffer_ptr,
-            blocks,
-        }
+        AlignedSlice { buffer_ptr, blocks }
     }
 
     pub fn as_slice(&mut self) -> &mut [u8] {
