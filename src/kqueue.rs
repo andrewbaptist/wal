@@ -110,40 +110,71 @@ impl PersistentDevice for KQueue {
         let mut completed_positions = Vec::new();
         let mut events = vec![unsafe { std::mem::zeroed::<libc::kevent>() }; 1024];
 
-        let nev = unsafe {
-            libc::kevent(
-                self.kq,
-                std::ptr::null(),
-                0,
-                events.as_mut_ptr(),
-                events.len() as _,
-                std::ptr::null(),
-            )
-        };
+        loop {
+            let nev = unsafe {
+                libc::kevent(
+                    self.kq,
+                    std::ptr::null(),
+                    0,
+                    events.as_mut_ptr(),
+                    events.len() as _,
+                    // Use non-blocking mode with zero timeout
+                    &libc::timespec {
+                        tv_sec: 0,
+                        tv_nsec: 0,
+                    },
+                )
+            };
 
-        if nev == -1 {
-            return Box::new(completed_positions.into_iter());
-        }
-
-        for i in 0..nev as usize {
-            let event = &events[i];
-            if event.filter == libc::EVFILT_AIO {
-                let aio_request_ptr = event.udata as *mut AioRequest;
-                let mut aio_request = unsafe { Box::from_raw(aio_request_ptr) };
-
-                let result = unsafe { libc::aio_error(&aio_request.aio) };
-                if result == 0 {
-                    let bytes_written = unsafe { libc::aio_return(&mut aio_request.aio) };
-                    if bytes_written >= 0 && aio_request.completion_data.notify {
-                        debug!(
-                            "Completed write at {:?}",
-                            aio_request.completion_data.wal_position
-                        );
-                        completed_positions.push(aio_request.completion_data.wal_position);
-                    }
+            if nev == -1 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::WouldBlock {
+                    // No more events available
+                    break;
                 }
+                warn!("kevent error: {}", err);
+                break;
+            }
 
-                // The AlignedSlice is dropped when `aio_request` is dropped.
+            if nev == 0 {
+                // No events available
+                break;
+            }
+
+            for i in 0..nev as usize {
+                let event = &events[i];
+                if event.filter == libc::EVFILT_AIO {
+                    let aio_request_ptr = event.udata as *mut AioRequest;
+                    let aio_request = unsafe { Box::from_raw(aio_request_ptr) };
+
+                    let result = unsafe { libc::aio_error(&aio_request.aio) };
+                    if result == 0 {
+                        // Success case
+                        let bytes_written = unsafe { libc::aio_return(&aio_request.aio) };
+                        if bytes_written >= 0 && aio_request.completion_data.notify {
+                            debug!(
+                                "Completed write at {:?} ({} bytes)",
+                                aio_request.completion_data.wal_position, bytes_written
+                            );
+                            completed_positions.push(aio_request.completion_data.wal_position);
+                        }
+                    } else if result == libc::EINPROGRESS {
+                        // Still in progress, put it back
+                        unsafe {
+                            let _ = Box::into_raw(aio_request);
+                        }
+                        continue;
+                    } else {
+                        // Error case
+                        warn!(
+                            "AIO error for position {:?}: {}",
+                            aio_request.completion_data.wal_position,
+                            std::io::Error::from_raw_os_error(result)
+                        );
+                    }
+
+                    // AlignedSlice will be dropped when aio_request goes out of scope
+                }
             }
         }
 
