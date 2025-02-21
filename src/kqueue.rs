@@ -63,6 +63,8 @@ impl Drop for KQueue {
     }
 }
 
+const MAX_COMPLETIONS: usize = 1024;
+
 impl PersistentDevice for KQueue {
     fn write(&mut self, pos: WalPosition, data: AlignedSlice, notify: bool) -> std::io::Result<()> {
         let completion_data = CompletionData {
@@ -142,7 +144,7 @@ impl PersistentDevice for KQueue {
 
     fn process_completions(&mut self) -> Box<dyn Iterator<Item = WalPosition>> {
         let mut completed_positions = Vec::new();
-        let mut events = vec![unsafe { std::mem::zeroed::<libc::kevent>() }; 1024];
+        let mut events = vec![unsafe { std::mem::zeroed::<libc::kevent>() }; MAX_COMPLETIONS];
 
         loop {
             let nev = unsafe {
@@ -177,8 +179,7 @@ impl PersistentDevice for KQueue {
 
             debug!("Found {nev} events");
 
-            for i in 0..nev as usize {
-                let event = &events[i];
+            for event in events.iter().take(nev as usize) {
                 if event.filter == libc::EVFILT_AIO {
                     let aio_request_ptr = event.udata as *mut AioRequest;
                     let mut aio_request = unsafe { Box::from_raw(aio_request_ptr) };
