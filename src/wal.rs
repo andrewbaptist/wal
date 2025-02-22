@@ -40,6 +40,7 @@ impl EntryHeader {
     }
 }
 
+// AI! Change to make dev a reference
 pub struct WalIterator {
     dev: Box<dyn PersistentDevice>,
     current: WalPosition,
