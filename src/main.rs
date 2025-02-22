@@ -16,8 +16,13 @@ fn main() {
     env_logger::init();
     let args: Vec<String> = env::args().collect();
 
-    // AI! convert args[1] into a uri.
-    let mut wal = Wal::open(args[1].into()).unwrap();
+    let uri = if args[1].starts_with("mem://") || args[1].starts_with("file://") {
+        args[1].parse().expect("Invalid URI format")
+    } else {
+        // For backwards compatibility, treat plain paths as file:// URIs
+        format!("file://{}", args[1]).parse().expect("Invalid path format")
+    };
+    let mut wal = Wal::open(uri).unwrap();
 
     for e in wal.iterate()? {
         info!("Recovered {:?}", e.unwrap().0);
