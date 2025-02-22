@@ -48,10 +48,9 @@ pub struct WalIterator<'a> {
     capacity: u32,
 }
 
-// AI! Fix the lifetime issue
-impl WalIterator {
+impl<'a> WalIterator<'a> {
     pub fn new(
-        dev: &Box<dyn PersistentDevice>,
+        dev: &'a Box<dyn PersistentDevice>,
         start: WalPosition,
         end: WalPosition,
         capacity: u32,
