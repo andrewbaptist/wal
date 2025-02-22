@@ -40,9 +40,8 @@ impl EntryHeader {
     }
 }
 
-// AI! Change to make dev a reference
-pub struct WalIterator {
-    dev: Box<dyn PersistentDevice>,
+pub struct WalIterator<'a> {
+    dev: &'a Box<dyn PersistentDevice>,
     current: WalPosition,
     end: WalPosition,
     // number of blocks in the file.
@@ -51,7 +50,7 @@ pub struct WalIterator {
 
 impl WalIterator {
     pub fn new(
-        dev: Box<dyn PersistentDevice>,
+        dev: &'a Box<dyn PersistentDevice>,
         start: WalPosition,
         end: WalPosition,
         capacity: u32,
