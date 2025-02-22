@@ -16,8 +16,8 @@ fn main() {
     env_logger::init();
     let args: Vec<String> = env::args().collect();
 
-    let (mut wal, entries) = Wal::open(Path::new(&args[1])).unwrap();
-    for e in entries {
+    let mut wal = Wal::open(Path::new(&args[1])).unwrap();
+    for e in wal.entries() {
         info!("Recovered {:?}", e.unwrap().0);
     }
 

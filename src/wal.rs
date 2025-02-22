@@ -40,17 +40,17 @@ impl EntryHeader {
     }
 }
 
-pub struct WalIterator<'a> {
-    dev: &'a Box<dyn PersistentDevice>,
+pub struct WalIterator {
+    dev: Box<dyn PersistentDevice>,
     current: WalPosition,
     end: WalPosition,
     // number of blocks in the file.
     capacity: u32,
 }
 
-impl<'a> WalIterator<'a> {
+impl WalIterator {
     pub fn new(
-        dev: &'a Box<dyn PersistentDevice>,
+        dev: Box<dyn PersistentDevice>,
         start: WalPosition,
         end: WalPosition,
         capacity: u32,
@@ -212,6 +212,12 @@ impl Wal {
         }
     }
 
+    pub fn iterate(&self) -> WalIterator {
+        let iterator = WalIterator::new(self.dev, self.tail, self.head, self.capacity);
+        info!("Recovering from {:?} to {:?}", self.tail, self.head);
+        iterator
+    }
+
     // Note that truncated entries can be revived during a recover as truncation is not persistent.
     // The caller needs to handle this and should call truncate after processing all the entries.
     /// Open the given URI and begin recovery. The WalIterator is returned.
@@ -219,25 +225,44 @@ impl Wal {
     ///   - mem:// - Use an in-memory device
     ///   - file:///path/to/file - Use a file-based device
     ///   - /path/to/file - Use a file-based device (backwards compatibility)
-    pub fn open(uri: http::Uri) -> std::io::Result<(Self, WalIterator)> {
+    pub fn open(uri: http::Uri) -> std::io::Result<Self> {
         info!("Starting recovery from {}", uri);
 
-        let (mut dev, capacity) = if uri.scheme_str() == Some("mem") {
+        let (dev, capacity) = Self::create_device(uri)?;
+
+        let init_position = WalPosition {
+            offset: 0,
+            rollover: 0,
+        };
+        let mut wal = Wal {
+            dev,
+            capacity,
+            head: init_position,
+            tail: init_position,
+        };
+
+        recover(&mut wal)?;
+
+        Ok(wal)
+    }
+
+    pub fn process_completions(&mut self) -> impl Iterator<Item = WalPosition> {
+        self.dev.process_completions()
+    }
+
+    fn create_device(uri: http::Uri) -> std::io::Result<(Box<dyn PersistentDevice>, u32)> {
+        if uri.scheme_str() == Some("mem") {
             // Parse size from path (e.g. mem://64 means 64 blocks)
             let blocks = uri.path().parse::<u32>().unwrap_or(1024); // Default to 1024 blocks
             let dev: Box<dyn PersistentDevice> = Box::new(crate::mem::MemDevice::new(blocks));
-            (dev, blocks)
-        } else {
+            Ok((dev, blocks))
+        } else if uri.scheme_str() == Some("mem") {
             let dev: Box<dyn PersistentDevice>;
             // Handle file paths
-            let path = if uri.scheme_str() == Some("file") {
-                uri.path()
-            } else {
-                uri.path()
-            };
-            let path = Path::new(path);
+            let path = Path::new(uri.path());
 
             // Check if we should force using specific devices
+            // TODO: This would be better as a different uri scheme.
             let use_sync = std::env::var("WAL_SYNC_DEVICE").is_ok();
 
             if use_sync {
@@ -276,147 +301,124 @@ impl Wal {
                 ));
             }
             let capacity = (capacity_bytes / BLOCK_SIZE as u64) as u32;
-            (dev, capacity)
+            Ok((dev, capacity))
+        } else {
+            Err(Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Unknown URI scheme",
+            ))
+        }
+    }
+}
+
+// Reads from the device to initialize the wal head and tail.
+fn recover(wal: &mut Wal) -> Result<(), Error> {
+    loop {
+        let buffer = wal.dev.read(wal.head.byte_offset(), BLOCK_SIZE as usize)?;
+
+        // Read the header including the CRC.
+        let header = match EntryHeader::read_from_bytes(&buffer[..HEADER_SIZE]) {
+            Ok(h) => h,
+            Err(_) => break,
         };
 
-        let mut wal = Wal {
-            dev,
-            capacity: capacity,
-            head: WalPosition {
-                offset: 0,
-                rollover: 0,
-            },
-            tail: WalPosition {
-                offset: 0,
-                rollover: 0,
-            },
+        // We don't support writing 0 length entries. If we find a zero it means the data
+        // wasn't initialized.
+        // TODO: Enforce not allowing 0 length writes.
+        if header.len == 0 {
+            debug!("Found empty entry");
+            break;
+        }
+
+        // Back up and read the entire data in one buffer.
+        let buffer = wal
+            .dev
+            .read(wal.head.byte_offset(), HEADER_SIZE + header.len as usize)?;
+
+        // Verify CRC
+        let crc = header.compute_crc(&buffer);
+        if crc != header.crc {
+            warn!("open CRC mismatch {crc}, {:?}", header);
+            break;
+        }
+
+        debug!("Head {:?}, found {:?}", wal.head, header);
+        // Stop once we find an entry that goes backwards.
+        if header.rollover < wal.head.rollover {
+            debug!("Found older entry");
+            break;
+        }
+
+        // Otherwise find the next place to try and read from (TODO: Handle the overflow case).
+        let next_offset = wal.head.offset + header.num_blocks();
+        if next_offset >= wal.capacity {
+            debug!("Found end of file");
+            break;
+        }
+        wal.head.offset = next_offset;
+        wal.head.rollover = header.rollover;
+        debug!("Moving head to {:?}", wal.head);
+    }
+    Ok(if wal.head.rollover > 0 {
+        wal.tail = WalPosition {
+            offset: wal.head.offset,
+            rollover: wal.head.rollover - 1,
         };
 
-        // Follow entries from the start of the file until we hit one that is invalid. The general
-        // invariant is we can follow entries from the start of the file until we find an invalid
-        // entry. If we end up wrapping around, then we can end the search early without scanning
-        // through all valid entries.
-        loop {
-            let buffer = dev.read(wal.head.byte_offset(), BLOCK_SIZE as usize)?;
+        debug!("Finding tail starting from {:?}", wal.tail);
 
+        // We need to find the old tail based on where the head ended. Scan forward from where the
+        // head currently is until we find a valid entry that is one rollover behind us.
+        for offset in (wal.tail.offset..wal.capacity).step_by(BLOCK_SIZE as usize) {
+            debug!("Checking offset {}", offset);
+
+            let buffer = wal.dev.read(wal.head.byte_offset(), BLOCK_SIZE as usize)?;
             // Read the header including the CRC.
-            let header = match EntryHeader::read_from_bytes(&buffer[..HEADER_SIZE]) {
-                Ok(h) => h,
-                Err(_) => break,
-            };
+            let header = EntryHeader::read_from_bytes(&buffer[..HEADER_SIZE]);
 
-            // We don't support writing 0 length entries. If we find a zero it means the data
-            // wasn't initialized.
-            // TODO: Enforce not allowing 0 length writes.
-            if header.len == 0 {
-                debug!("Found empty entry");
-                break;
+            // This can happen because there was garbage before our first entry, keep scanning
+            // forwards until we find something useful.
+            // TODO: This might not ever happen
+            if header.is_err() {
+                debug!("Found undecodable header, skipping");
+                continue;
             }
 
-            // Back up and read the entire data in one buffer.
-            let buffer = dev.read(wal.head.byte_offset(), HEADER_SIZE + header.len as usize)?;
+            let header = header.unwrap();
+
+            if header.rollover != wal.tail.rollover {
+                debug!(
+                    "Found a header with the wrong rollover, skipping {:?}",
+                    header
+                );
+                continue;
+            }
+
+            println!(
+                "Finding tail using header {:?} at offset {} ",
+                header, offset
+            );
+
+            // TODO: Add a security mechanism against someone writing a bad block that looks like a
+            // header and checks out from a CRC perspective.
+            //
+            // Make sure the data really is valid by checking the CRC.
+            let buffer = wal
+                .dev
+                .read(wal.head.byte_offset(), HEADER_SIZE + header.len as usize)?;
 
             // Verify CRC
             let crc = header.compute_crc(&buffer);
             if crc != header.crc {
-                warn!("open CRC mismatch {crc}, {:?}", header);
-                break;
+                warn!("Tail CRC mismatch {crc}, {:?}", header);
+                continue;
             }
 
-            debug!("Head {:?}, found {:?}", wal.head, header);
-            // Stop once we find an entry that goes backwards.
-            if header.rollover < wal.head.rollover {
-                debug!("Found older entry");
-                break;
-            }
-
-            // Otherwise find the next place to try and read from (TODO: Handle the overflow case).
-            let next_offset = wal.head.offset + header.num_blocks();
-            if next_offset >= wal.capacity {
-                debug!("Found end of file");
-                break;
-            }
-            wal.head.offset = next_offset;
-            wal.head.rollover = header.rollover;
-            debug!("Moving head to {:?}", wal.head);
+            // At this point we found a valid old entry. Set this as our tail and we are done.
+            wal.tail.offset = offset;
+            break;
         }
-
-        // Its possible we got to the end and didn't find any more entries. Set our tail to be the
-        // 0 entry at the previous generation.
-        //
-        // We set the tail = head which means that the entire wal is valid and any appends will
-        // fail. The user must call trucate before using after a recover.
-        //
-        // Set the tail to be the starting position with a prior rollover count. We will try and
-        // find a better tail next.
-        if wal.head.rollover > 0 {
-            wal.tail = WalPosition {
-                offset: wal.head.offset,
-                rollover: wal.head.rollover - 1,
-            };
-
-            debug!("Finding tail starting from {:?}", wal.tail);
-
-            // We need to find the old tail based on where the head ended. Scan forward from where the
-            // head currently is until we find a valid entry that is one rollover behind us.
-            for offset in (wal.tail.offset..wal.capacity).step_by(BLOCK_SIZE as usize) {
-                debug!("Checking offset {}", offset);
-
-                let mut buffer = dev.read(wal.head.byte_offset(), BLOCK_SIZE as usize)?;
-
-                // Read the header including the CRC.
-                let header = EntryHeader::read_from_bytes(&buffer[..HEADER_SIZE]);
-
-                // This can happen because there was garbage before our first entry, keep scanning
-                // forwards until we find something useful.
-                // TODO: This might not ever happen
-                if header.is_err() {
-                    debug!("Found undecodable header, skipping");
-                    continue;
-                }
-
-                let header = header.unwrap();
-
-                if header.rollover != wal.tail.rollover {
-                    debug!(
-                        "Found a header with the wrong rollover, skipping {:?}",
-                        header
-                    );
-                    continue;
-                }
-
-                println!(
-                    "Finding tail using header {:?} at offset {} ",
-                    header, offset
-                );
-
-                // TODO: Add a security mechanism against someone writing a bad block that looks like a
-                // header and checks out from a CRC perspective.
-                //
-                // Make sure the data really is valid by checking the CRC.
-                let buffer = dev.read(wal.head.byte_offset(), HEADER_SIZE + header.len as usize)?;
-
-                // Verify CRC
-                let crc = header.compute_crc(&buffer);
-                if crc != header.crc {
-                    warn!("Tail CRC mismatch {crc}, {:?}", header);
-                    continue;
-                }
-
-                // At this point we found a valid old entry. Set this as our tail and we are done.
-                wal.tail.offset = offset;
-                break;
-            }
-        }
-
-        let iterator = WalIterator::new(&dev, wal.tail, wal.head, wal.capacity);
-        info!("Recovering from {:?} to {:?}", wal.tail, wal.head);
-        Ok((wal, iterator))
-    }
-
-    pub fn process_completions(&mut self) -> impl Iterator<Item = WalPosition> {
-        self.dev.process_completions()
-    }
+    })
 }
 
 impl Drop for Wal {
