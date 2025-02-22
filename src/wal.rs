@@ -41,16 +41,16 @@ impl EntryHeader {
 }
 
 pub struct WalIterator<'a> {
-    dev: &'a Box<dyn PersistentDevice>,
+    dev: &'a mut Box<dyn PersistentDevice>,
     current: WalPosition,
     end: WalPosition,
     // number of blocks in the file.
     capacity: u32,
 }
 
-impl WalIterator {
+impl<'a> WalIterator<'a> {
     pub fn new(
-        dev: &'a Box<dyn PersistentDevice>,
+        dev: &'a mut Box<dyn PersistentDevice>,
         start: WalPosition,
         end: WalPosition,
         capacity: u32,
@@ -64,7 +64,7 @@ impl WalIterator {
     }
 }
 
-impl Iterator for WalIterator {
+impl Iterator for WalIterator<'_> {
     type Item = std::io::Result<(WalPosition, Vec<u8>)>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -212,8 +212,8 @@ impl Wal {
         }
     }
 
-    pub fn iterate(&self) -> WalIterator {
-        let iterator = WalIterator::new(self.dev, self.tail, self.head, self.capacity);
+    pub fn iterate(&mut self) -> WalIterator {
+        let iterator = WalIterator::new(&mut self.dev, self.tail, self.head, self.capacity);
         info!("Recovering from {:?} to {:?}", self.tail, self.head);
         iterator
     }
@@ -225,10 +225,10 @@ impl Wal {
     ///   - mem:// - Use an in-memory device
     ///   - file:///path/to/file - Use a file-based device
     ///   - /path/to/file - Use a file-based device (backwards compatibility)
-    pub fn open(uri: http::Uri) -> std::io::Result<Self> {
-        info!("Starting recovery from {}", uri);
+    pub fn open(url: url::Url) -> std::io::Result<Self> {
+        info!("Starting recovery from {}", url);
 
-        let (dev, capacity) = Self::create_device(uri)?;
+        let (dev, capacity) = Self::create_device(url)?;
 
         let init_position = WalPosition {
             offset: 0,
@@ -250,19 +250,20 @@ impl Wal {
         self.dev.process_completions()
     }
 
-    fn create_device(uri: http::Uri) -> std::io::Result<(Box<dyn PersistentDevice>, u32)> {
-        if uri.scheme_str() == Some("mem") {
+    fn create_device(url: url::Url) -> std::io::Result<(Box<dyn PersistentDevice>, u32)> {
+        if url.scheme() == "mem" {
             // Parse size from path (e.g. mem://64 means 64 blocks)
-            let blocks = uri.path().parse::<u32>().unwrap_or(1024); // Default to 1024 blocks
+            let blocks = url.path().parse::<u32>().unwrap_or(1024); // Default to 1024 blocks
             let dev: Box<dyn PersistentDevice> = Box::new(crate::mem::MemDevice::new(blocks));
             Ok((dev, blocks))
-        } else if uri.scheme_str() == Some("mem") {
+        } else if url.scheme() == "file" {
             let dev: Box<dyn PersistentDevice>;
             // Handle file paths
-            let path = Path::new(uri.path());
+            let path = Path::new(url.path());
+            println!("{:?}", path);
 
             // Check if we should force using specific devices
-            // TODO: This would be better as a different uri scheme.
+            // TODO: This would be better as a different url scheme.
             let use_sync = std::env::var("WAL_SYNC_DEVICE").is_ok();
 
             if use_sync {
@@ -283,14 +284,8 @@ impl Wal {
                 }
             }
 
-            let capacity_bytes = if uri.scheme_str() == Some("mem") {
-                // Calculate capacity from blocks
-                let blocks = uri.path().parse::<u32>().unwrap_or(1024);
-                (blocks as u64) * BLOCK_SIZE as u64
-            } else {
-                let path = Path::new(uri.path());
-                path.metadata()?.len()
-            };
+            let path = Path::new(url.path());
+            let capacity_bytes = path.metadata()?.len();
             if capacity_bytes % BLOCK_SIZE as u64 != 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -393,11 +388,6 @@ fn recover(wal: &mut Wal) -> Result<(), Error> {
                 );
                 continue;
             }
-
-            println!(
-                "Finding tail using header {:?} at offset {} ",
-                header, offset
-            );
 
             // TODO: Add a security mechanism against someone writing a bad block that looks like a
             // header and checks out from a CRC perspective.
