@@ -2,6 +2,8 @@ use crate::common::*;
 use io_uring::{opcode, types, IoUring, Probe};
 use libc::{O_DIRECT, O_WRONLY};
 use std::ffi::CString;
+use std::fs::OpenOptions;
+use std::io::{Read, Seek};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::RawFd;
 use std::path::Path;
@@ -16,10 +18,13 @@ struct CompletionData {
 pub struct LinuxUring {
     fd: RawFd,
     uring: IoUring,
+    // Only used for startup reads.
+    file: std::fs::File,
 }
 
 impl LinuxUring {
     pub fn new(path: &Path) -> std::io::Result<Self> {
+        let file: std::fs::File = OpenOptions::new().read(true).open(path)?;
         let path = CString::new(path.as_os_str().as_bytes())?;
         let fd = unsafe { libc::open(path.as_ptr(), O_WRONLY | O_DIRECT, 0o644) };
         if fd < 0 {
@@ -40,7 +45,7 @@ impl LinuxUring {
             ));
         }
 
-        Ok(LinuxUring { fd, uring })
+        Ok(LinuxUring { fd, uring, file })
     }
 }
 
@@ -82,7 +87,6 @@ impl PersistentDevice for LinuxUring {
     // appends as the data will be left around until the next append is called, and the user won't
     // be notified the data has been synced.
     fn process_completions(&mut self) -> std::vec::IntoIter<WalPosition> {
-        type Iter = std::vec::IntoIter<WalPosition>;
         let mut v: Vec<WalPosition> = Vec::new();
 
         // TODO: Return the iterator live as we go rather than collecting first.
@@ -101,5 +105,12 @@ impl PersistentDevice for LinuxUring {
             // The initial write buffer can now be dropped as the data is written to disk.
         }
         v.into_iter()
+    }
+
+    fn read(&mut self, pos: u64, len: usize) -> std::io::Result<Vec<u8>> {
+        let mut buffer = vec![0; len];
+        self.file.seek(std::io::SeekFrom::Start(pos))?;
+        self.file.read_exact(&mut buffer)?;
+        Ok(buffer)
     }
 }
