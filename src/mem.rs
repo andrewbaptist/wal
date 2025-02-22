@@ -48,6 +48,7 @@ impl PersistentDevice for MemDevice {
         Box::new(completions.into_iter())
     }
 
+    // AI! Update this to return an empty array if its not found in the buffer.
     fn read(&mut self, pos: u64, len: usize) -> std::io::Result<Vec<u8>> {
         self.buffer
             .get(&((pos / BLOCK_SIZE as u64) as u32))
