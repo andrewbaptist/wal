@@ -10,10 +10,9 @@ pub trait PersistentDevice: Send {
     /// if it is unable to initate the write.
     fn write(&mut self, pos: WalPosition, data: AlignedSlice, notify: bool) -> std::io::Result<()>;
 
-    // AI! This shouldn't require a Box, but I'm not sure how to do this correctly.
     /// process_completions must be called periodically by the client to determine which previously
     /// written data has been synced to disk. It will write any completed data to the given channel.
-    fn process_completions(&mut self) -> Box<dyn Iterator<Item = WalPosition>>;
+    fn process_completions(&mut self) -> std::vec::IntoIter<WalPosition>;
 
     /// Read data from the device at the given position and length
     fn read(&mut self, byte_offset: u64, len: usize) -> std::io::Result<Vec<u8>>;

@@ -45,10 +45,10 @@ impl PersistentDevice for MemDevice {
         Ok(())
     }
 
-    fn process_completions(&mut self) -> Box<dyn Iterator<Item = WalPosition>> {
+    fn process_completions(&mut self) -> std::vec::IntoIter<WalPosition> {
         // Return the completions and clear the list
         let completions = std::mem::take(&mut self.completions);
-        Box::new(completions.into_iter())
+        completions.into_iter()
     }
 
     fn read(&mut self, pos: u64, len: usize) -> std::io::Result<Vec<u8>> {

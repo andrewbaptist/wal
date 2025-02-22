@@ -93,7 +93,7 @@ impl PersistentDevice for MacOsAsyncIO {
         })
     }
 
-    fn process_completions(&mut self) -> Box<dyn Iterator<Item = WalPosition>> {
+    fn process_completions(&mut self) -> std::vec::IntoIter<WalPosition> {
         let mut completions = Vec::new();
 
         // Drain all available completion notifications
@@ -101,7 +101,7 @@ impl PersistentDevice for MacOsAsyncIO {
             completions.push(pos);
         }
 
-        Box::new(completions.into_iter())
+        completions.into_iter()
     }
 
     fn read(&mut self, pos: u64, len: usize) -> std::io::Result<Vec<u8>> {

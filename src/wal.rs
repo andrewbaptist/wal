@@ -246,7 +246,7 @@ impl Wal {
         Ok(wal)
     }
 
-    pub fn process_completions(&mut self) -> impl Iterator<Item = WalPosition> {
+    pub fn process_completions(&mut self) -> std::vec::IntoIter<WalPosition> {
         self.dev.process_completions()
     }
 

@@ -54,16 +54,16 @@ impl PersistentDevice for SyncDevice {
         Ok(())
     }
 
-    fn process_completions(&mut self) -> Box<dyn Iterator<Item = WalPosition>> {
+    fn process_completions(&mut self) -> std::vec::IntoIter<WalPosition> {
         // Sync all pending writes
         if let Err(e) = self.file.sync_data() {
             warn!("Failed to sync data: {}", e);
-            return Box::new(std::iter::empty());
+            return Vec::new().into_iter();
         }
 
         // Return an iterator over the completed positions
         let completed = self.pending_syncs.drain(..).collect::<Vec<_>>();
-        Box::new(completed.into_iter())
+        completed.into_iter()
     }
 
     fn read(&mut self, pos: u64, len: usize) -> std::io::Result<Vec<u8>> {

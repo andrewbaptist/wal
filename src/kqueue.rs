@@ -148,7 +148,7 @@ impl PersistentDevice for KQueue {
         Ok(())
     }
 
-    fn process_completions(&mut self) -> Box<dyn Iterator<Item = WalPosition>> {
+    fn process_completions(&mut self) -> std::vec::IntoIter<WalPosition> {
         let mut completed_positions = Vec::new();
         let mut events = vec![unsafe { std::mem::zeroed::<libc::kevent>() }; MAX_COMPLETIONS];
 
@@ -219,7 +219,7 @@ impl PersistentDevice for KQueue {
             }
         }
 
-        Box::new(completed_positions.into_iter())
+        completed_positions.into_iter()
     }
 
     fn read(&mut self, pos: u64, len: usize) -> std::io::Result<Vec<u8>> {

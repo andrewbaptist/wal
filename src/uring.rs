@@ -81,7 +81,8 @@ impl PersistentDevice for LinuxUring {
     // to call this before every append. However that isn't ideal if there is a long time between
     // appends as the data will be left around until the next append is called, and the user won't
     // be notified the data has been synced.
-    fn process_completions(&mut self) -> Box<dyn Iterator<Item = WalPosition>> {
+    fn process_completions(&mut self) -> std::vec::IntoIter<WalPosition> {
+        type Iter = std::vec::IntoIter<WalPosition>;
         let mut v: Vec<WalPosition> = Vec::new();
 
         // TODO: Return the iterator live as we go rather than collecting first.
@@ -99,6 +100,6 @@ impl PersistentDevice for LinuxUring {
             //
             // The initial write buffer can now be dropped as the data is written to disk.
         }
-        Box::new(v.into_iter())
+        v.into_iter()
     }
 }
