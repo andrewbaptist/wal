@@ -1,3 +1,5 @@
+use log::info;
+
 use crate::common::*;
 use std::collections::HashMap;
 
@@ -11,6 +13,7 @@ pub struct MemDevice {
 
 impl MemDevice {
     pub fn new(capacity_blocks: u32) -> Self {
+        info!("Initalizing mem device with capacity {}", capacity_blocks);
         Self {
             buffer: HashMap::new(),
             completions: Vec::new(),

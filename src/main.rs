@@ -8,7 +8,7 @@ use std::time::Duration;
 use wal::common::WalPosition;
 use wal::wal::Wal;
 
-const NUM_TO_WRITE: usize = 2;
+const NUM_TO_WRITE: usize = 20;
 
 // This demonstrates how to use the wal. Open and begin recovery. Once it is recovered, then
 fn main() {

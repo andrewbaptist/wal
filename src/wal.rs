@@ -253,7 +253,7 @@ impl Wal {
     fn create_device(url: url::Url) -> std::io::Result<(Box<dyn PersistentDevice>, u32)> {
         if url.scheme() == "mem" {
             // Parse size from path (e.g. mem://64 means 64 blocks)
-            let blocks = url.path().parse::<u32>().unwrap_or(1024); // Default to 1024 blocks
+            let blocks = url.path().parse::<u32>().unwrap();
             let dev: Box<dyn PersistentDevice> = Box::new(crate::mem::MemDevice::new(blocks));
             Ok((dev, blocks))
         } else if url.scheme() == "file" {
@@ -414,6 +414,6 @@ fn recover(wal: &mut Wal) -> Result<(), Error> {
 impl Drop for Wal {
     fn drop(&mut self) {
         // Discard all the data that is completed when the wal is being dropped.
-        for _ in self.process_completions() {}
+        for _ in self.dev.process_completions() {}
     }
 }
