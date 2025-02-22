@@ -16,8 +16,10 @@ fn main() {
     env_logger::init();
     let args: Vec<String> = env::args().collect();
 
-    let mut wal = Wal::open(Path::new(&args[1])).unwrap();
-    for e in wal.entries() {
+    // AI! convert args[1] into a uri.
+    let mut wal = Wal::open(args[1].into()).unwrap();
+
+    for e in wal.iterate()? {
         info!("Recovered {:?}", e.unwrap().0);
     }
 
