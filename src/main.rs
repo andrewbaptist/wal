@@ -1,6 +1,5 @@
 use log::{debug, info};
 use std::env;
-use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 use std::thread::sleep;
@@ -16,15 +15,12 @@ fn main() {
     env_logger::init();
     let args: Vec<String> = env::args().collect();
 
-    let uri = if args[1].starts_with("mem://") || args[1].starts_with("file://") {
-        args[1].parse().expect("Invalid URI format")
-    } else {
-        // For backwards compatibility, treat plain paths as file:// URIs
-        format!("file://{}", args[1]).parse().expect("Invalid path format")
-    };
+    println!("{}", args[1]);
+    // AI! correctly parse the uri from args[1]  - it is returning a InvalidFormat when I pass a file reference.
+    let uri = args[1].parse().unwrap();
     let mut wal = Wal::open(uri).unwrap();
 
-    for e in wal.iterate()? {
+    for e in wal.iterate() {
         info!("Recovered {:?}", e.unwrap().0);
     }
 
