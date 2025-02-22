@@ -8,6 +8,10 @@ use crate::common::PersistentDevice;
 use libc::{self, c_void, F_NOCACHE, O_NONBLOCK, O_WRONLY};
 use std::ffi::c_int;
 use std::ffi::CString;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::io::Seek;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::RawFd;
 use std::path::Path;
@@ -27,6 +31,7 @@ struct CompletionData {
 pub struct KQueue {
     fd: RawFd,
     kq: RawFd,
+    file: File,
 }
 
 // Struct to hold completion data along with the AIO control block.
@@ -37,6 +42,7 @@ struct AioRequest {
 
 impl KQueue {
     pub fn new(path: &Path) -> std::io::Result<Self> {
+        let file = OpenOptions::new().read(true).open(path)?;
         let path = CString::new(path.as_os_str().as_bytes())?;
         let fd = unsafe { libc::open(path.as_ptr(), O_NONBLOCK | O_WRONLY | F_NOCACHE, 0o644) };
         if fd < 0 {
@@ -50,7 +56,7 @@ impl KQueue {
             return Err(err);
         }
 
-        Ok(KQueue { fd, kq })
+        Ok(KQueue { fd, kq, file })
     }
 }
 
@@ -214,5 +220,12 @@ impl PersistentDevice for KQueue {
         }
 
         Box::new(completed_positions.into_iter())
+    }
+
+    fn read(&mut self, pos: u64, len: usize) -> std::io::Result<Vec<u8>> {
+        let mut buffer = vec![0; len];
+        self.file.seek(std::io::SeekFrom::Start(pos))?;
+        self.file.read_exact(&mut buffer)?;
+        Ok(buffer)
     }
 }

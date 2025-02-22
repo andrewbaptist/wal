@@ -2,7 +2,7 @@ use crate::common::*;
 use log::warn;
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
-use std::io::{Seek, Write};
+use std::io::{Read, Seek, Write};
 use std::path::Path;
 
 /// SyncDevice uses standard synchronous file operations with deferred fsync
@@ -16,6 +16,7 @@ impl SyncDevice {
     pub fn new(path: &Path) -> std::io::Result<Self> {
         let file = OpenOptions::new()
             .write(true)
+            .read(true)
             .truncate(false)
             .create(false)
             .open(path)?;
@@ -65,9 +66,9 @@ impl PersistentDevice for SyncDevice {
         Box::new(completed.into_iter())
     }
 
-    fn read(&self, pos: WalPosition, len: usize) -> std::io::Result<Vec<u8>> {
+    fn read(&mut self, pos: u64, len: usize) -> std::io::Result<Vec<u8>> {
         let mut buffer = vec![0; len];
-        self.file.seek(std::io::SeekFrom::Start(pos.byte_offset()))?;
+        self.file.seek(std::io::SeekFrom::Start(pos))?;
         self.file.read_exact(&mut buffer)?;
         Ok(buffer)
     }

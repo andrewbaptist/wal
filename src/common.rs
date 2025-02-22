@@ -16,7 +16,7 @@ pub trait PersistentDevice: Send {
     fn process_completions(&mut self) -> Box<dyn Iterator<Item = WalPosition>>;
 
     /// Read data from the device at the given position and length
-    fn read(&self, pos: WalPosition, len: usize) -> std::io::Result<Vec<u8>>;
+    fn read(&mut self, byte_offset: u64, len: usize) -> std::io::Result<Vec<u8>>;
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]

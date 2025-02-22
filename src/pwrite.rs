@@ -3,6 +3,8 @@ use log::debug;
 //use crossbeam::channel::{self, TrySendError};
 use libc::{self, F_NOCACHE, O_WRONLY};
 use std::ffi::CString;
+use std::fs::OpenOptions;
+use std::io::{Read, Seek};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::mpsc;
@@ -18,11 +20,15 @@ struct CompletionData {
 pub struct MacOsAsyncIO {
     task_sender: mpsc::SyncSender<CompletionData>,
     completion_receiver: mpsc::Receiver<WalPosition>,
+    // Only used for startup reads.
+    file: std::fs::File,
 }
 
 impl MacOsAsyncIO {
     pub fn new(path: &Path) -> std::io::Result<Self> {
+        let file = OpenOptions::new().read(true).open(path)?;
         let path = CString::new(path.as_os_str().as_bytes())?;
+        // Only used for starup reads.
 
         // Open file with write-only mode and NOCACHE,
         let fd = unsafe { libc::open(path.as_ptr(), O_WRONLY | F_NOCACHE, 0o644) };
@@ -62,43 +68,10 @@ impl MacOsAsyncIO {
         });
 
         Ok(Self {
+            file,
             task_sender,
             completion_receiver,
         })
-    }
-
-    fn read(&self, pos: WalPosition, len: usize) -> std::io::Result<Vec<u8>> {
-        // Open the file in read-only mode
-        let path = CString::new(self.path.as_os_str().as_bytes())?;
-        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY, 0o644) };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-
-        // Allocate buffer and perform the read
-        let mut buffer = vec![0; len];
-        let res = unsafe {
-            libc::pread(
-                fd,
-                buffer.as_mut_ptr() as *mut libc::c_void,
-                len,
-                pos.byte_offset() as i64,
-            )
-        };
-
-        // Close the file descriptor
-        unsafe { libc::close(fd) };
-
-        if res < 0 {
-            Err(std::io::Error::last_os_error())
-        } else if res as usize != len {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "Short read",
-            ))
-        } else {
-            Ok(buffer)
-        }
     }
 }
 
@@ -129,5 +102,12 @@ impl PersistentDevice for MacOsAsyncIO {
         }
 
         Box::new(completions.into_iter())
+    }
+
+    fn read(&mut self, pos: u64, len: usize) -> std::io::Result<Vec<u8>> {
+        let mut buffer = vec![0; len];
+        self.file.seek(std::io::SeekFrom::Start(pos))?;
+        self.file.read_exact(&mut buffer)?;
+        Ok(buffer)
     }
 }

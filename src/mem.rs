@@ -4,7 +4,7 @@ use std::collections::HashMap;
 /// MemDevice is an in-memory implementation of PersistentDevice that
 /// holds the buffer in memory.
 pub struct MemDevice {
-    buffer: HashMap<WalPosition, Vec<u8>>,
+    buffer: HashMap<u32, Vec<u8>>,
     completions: Vec<WalPosition>,
     capacity_blocks: u32,
 }
@@ -32,7 +32,7 @@ impl PersistentDevice for MemDevice {
 
         // Store the data in memory
         let slice = unsafe { std::slice::from_raw_parts(data.buffer_ptr, data.size() as usize) };
-        self.buffer.insert(pos, slice.to_vec());
+        self.buffer.insert(pos.offset, slice.to_vec());
 
         // Track completion if requested
         if notify {
@@ -48,8 +48,9 @@ impl PersistentDevice for MemDevice {
         Box::new(completions.into_iter())
     }
 
-    fn read(&self, pos: WalPosition, len: usize) -> std::io::Result<Vec<u8>> {
-        self.buffer.get(&pos)
+    fn read(&mut self, pos: u64, len: usize) -> std::io::Result<Vec<u8>> {
+        self.buffer
+            .get(&((pos / BLOCK_SIZE as u64) as u32))
             .map(|data| {
                 if len > data.len() {
                     Err(std::io::Error::new(
@@ -101,11 +102,11 @@ mod tests {
 
         // Verify data was stored (only check first 16 bytes)
         assert_eq!(
-            &device.buffer.get(&pos1).unwrap()[..16],
+            &device.buffer.get(&pos1.offset).unwrap()[..16],
             b"hello\0\0\0\0\0\0\0\0\0\0\0"
         );
         assert_eq!(
-            &device.buffer.get(&pos2).unwrap()[..16],
+            &device.buffer.get(&pos2.offset).unwrap()[..16],
             b"world\0\0\0\0\0\0\0\0\0\0\0"
         );
 
